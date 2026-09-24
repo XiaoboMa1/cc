@@ -8,16 +8,26 @@ import {
 describe('platform defaults', () => {
   it('uses familiar Command shortcuts on macOS without changing Windows defaults', () => {
     expect(defaultHotkeysForPlatform('darwin')).toEqual({
-      toggle: 'Command+B',
-      shot: 'Command+H',
-      shotUndo: 'Command+L',
-      shotClear: 'Command+R',
+      hotkeyToggle: 'Command+B',
+      hotkeyShot: 'Command+H',
+      hotkeyShotUndo: 'Command+L',
+      hotkeyShotClear: 'Command+R',
+      hotkeyAnswer: 'Command+Enter',
+      hotkeyCapture: 'Command+S',
+      hotkeyClearAnswers: 'Command+D',
+      hotkeyClearTranscript: 'Command+T',
+      hotkeyMove: 'Command',
     });
     expect(defaultHotkeysForPlatform('win32')).toEqual({
-      toggle: 'Control+B',
-      shot: 'Control+H',
-      shotUndo: 'Control+L',
-      shotClear: 'Control+R',
+      hotkeyToggle: 'Control+B',
+      hotkeyShot: 'Control+H',
+      hotkeyShotUndo: 'Control+L',
+      hotkeyShotClear: 'Control+R',
+      hotkeyAnswer: 'Control+Enter',
+      hotkeyCapture: 'Control+S',
+      hotkeyClearAnswers: 'Control+D',
+      hotkeyClearTranscript: 'Control+T',
+      hotkeyMove: 'Control',
     });
   });
 

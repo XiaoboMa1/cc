@@ -79,9 +79,22 @@ config/tokenizer files). The encoder runs on the GPU via DirectML.
 ## Stealth
 
 Content protection (`Stealth` toggle in the title bar, on by default) excludes
-the window from OBS, screen shares and screenshots on Windows. The global
-hotkeys default to **Control+B** (hide/show) and **Control+Shift+S**
-(region-screenshot Q&A).
+the window from OBS, screen shares and screenshots on Windows.
+
+Global hotkeys (defaults; each one can be changed or cleared in Settings).
+While the app runs, these combinations are not passed on to other programs:
+
+| Hotkey | Action |
+| --- | --- |
+| Control+B | hide / show the window |
+| Control+Arrow | move the window 40 px |
+| Control+S | start system-audio capture |
+| Control+H | region screenshot into the visual-context queue (drag, or Control+Shift+A at two corners; Esc cancels) |
+| Control+L | remove the last queued screenshot |
+| Control+R | clear the screenshot queue |
+| Control+Enter | answer now: interviewer lines since the last answer + queued screenshots |
+| Control+D | clear this session's answers |
+| Control+T | clear this session's transcript |
 
 ## Data locations
 

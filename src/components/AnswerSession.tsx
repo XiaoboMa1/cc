@@ -22,6 +22,8 @@ export interface ShotQueueItem {
   id: string;
   dataUrl: string;
   status: 'extracting' | 'ready' | 'error';
+  /** Date.now() when queued — a continuous answer with nothing newer than its previous one is skipped */
+  at: number;
   text?: string;
   error?: string;
 }

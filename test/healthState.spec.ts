@@ -5,6 +5,7 @@ import {
   deriveServiceHealth,
   type HealthInput,
 } from '../shared/healthState';
+import { defaultHotkeysForPlatform } from '../shared/platform';
 import type { ProviderVerification, PublicSettings } from '../shared/protocol';
 
 const okVerdict: ProviderVerification = {
@@ -47,10 +48,7 @@ function settings(over: Partial<PublicSettings> = {}): PublicSettings {
     },
     ui: {
       stealth: true,
-      hotkeyToggle: 'Control+Shift+M',
-      hotkeyShot: 'Control+Shift+S',
-      hotkeyShotUndo: 'Control+L',
-      hotkeyShotClear: 'Control+R',
+      ...defaultHotkeysForPlatform('win32'),
       opacity: 0.94,
       fontScale: 'medium',
       theme: 'dark',

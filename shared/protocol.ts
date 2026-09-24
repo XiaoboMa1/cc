@@ -24,6 +24,55 @@ export type UiLang = 'zh' | 'en';
 /** per-session material slots: resume vs job description */
 export type KbSlot = 'resume' | 'jd';
 
+/**
+ * Global hotkeys: Electron accelerators, '' = off. electron/main.ts
+ * registerHotkeys registers them system-wide, so while the app runs these
+ * combinations never reach another app (browser, code editor).
+ */
+export interface HotkeySettings {
+  /** show/hide the overlay */
+  hotkeyToggle: string;
+  /** region-capture a screenshot INTO the visual-context queue (R6) — no
+   * immediate ask; the manual 📷 button still asks at once */
+  hotkeyShot: string;
+  /** drop the most recently queued screenshot */
+  hotkeyShotUndo: string;
+  /** empty the whole queued-screenshot visual context */
+  hotkeyShotClear: string;
+  /** answer now: interviewer lines since the last answer + queued screenshots */
+  hotkeyAnswer: string;
+  /** start system-audio capture (same as the 开始 button) */
+  hotkeyCapture: string;
+  /** clear this session's answers (right pane 清空) */
+  hotkeyClearAnswers: string;
+  /** clear this session's transcript (left pane 清空) */
+  hotkeyClearTranscript: string;
+  /** a modifier, not a full accelerator: modifier+Up/Down/Left/Right moves the overlay */
+  hotkeyMove: string;
+}
+
+export const HOTKEY_FIELDS = [
+  'hotkeyToggle',
+  'hotkeyShot',
+  'hotkeyShotUndo',
+  'hotkeyShotClear',
+  'hotkeyAnswer',
+  'hotkeyCapture',
+  'hotkeyClearAnswers',
+  'hotkeyClearTranscript',
+  'hotkeyMove',
+] as const satisfies readonly (keyof HotkeySettings)[];
+
+/** hotkeys whose action lives in the renderer; main runs window.__mcHotkey(action) */
+export type HotkeyAction =
+  | 'shot'
+  | 'shotUndo'
+  | 'shotClear'
+  | 'answer'
+  | 'capture'
+  | 'clearAnswers'
+  | 'clearTranscript';
+
 /** outcome of a provider connection test (Phase 3 runs them; the settings
  * schema stores the last result so the UI can show it after a restart) */
 export type ProviderTestCode =
@@ -211,16 +260,8 @@ export interface SettingsFile {
       model?: string;
     };
   };
-  ui: {
+  ui: HotkeySettings & {
     stealth: boolean;
-    hotkeyToggle: string;
-    /** global hotkey: region-capture a screenshot INTO the visual-context
-     * queue (R6) — no immediate ask; the manual 📷 button still asks at once */
-    hotkeyShot: string;
-    /** global hotkey: drop the most recently queued screenshot */
-    hotkeyShotUndo: string;
-    /** global hotkey: empty the whole queued-screenshot visual context */
-    hotkeyShotClear: string;
     opacity: number;
     /** answer-body font size (small=13px / medium=16px / large=19px) */
     fontScale: FontScale;
@@ -297,12 +338,8 @@ export interface PublicSettings {
     };
     localRealtime: { model?: string };
   };
-  ui: {
+  ui: HotkeySettings & {
     stealth: boolean;
-    hotkeyToggle: string;
-    hotkeyShot: string;
-    hotkeyShotUndo: string;
-    hotkeyShotClear: string;
     opacity: number;
     fontScale: FontScale;
     theme: ThemeMode;
@@ -354,12 +391,8 @@ export interface SettingsPatch {
     };
     localRealtime?: { model?: string };
   };
-  ui?: {
+  ui?: Partial<HotkeySettings> & {
     stealth?: boolean;
-    hotkeyToggle?: string;
-    hotkeyShot?: string;
-    hotkeyShotUndo?: string;
-    hotkeyShotClear?: string;
     opacity?: number;
     fontScale?: FontScale;
     theme?: ThemeMode;
@@ -569,13 +602,6 @@ export const IPC = {
   appQuit: 'app:quit',
   /** main -> renderer: request auto start capture (dev/E2E) */
   autoStart: 'capture:auto-start',
-  /** main -> renderer: the screenshot hotkey was pressed (capture INTO the
-   * visual-context queue; see SettingsFile.ui.hotkeyShot) */
-  shotHotkey: 'shot:hotkey',
-  /** main -> renderer: drop the most recently queued screenshot */
-  shotUndoHotkey: 'shot:hotkey:undo',
-  /** main -> renderer: empty the queued-screenshot visual context */
-  shotClearHotkey: 'shot:hotkey:clear',
   /** renderer -> main: start a streaming answer (LlmAskPayload) */
   llmAsk: 'llm:ask',
   /** renderer -> main: screenshot + vision question ({requestId, question}); answer streams on llmEvent */

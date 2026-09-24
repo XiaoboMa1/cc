@@ -66,7 +66,21 @@ C:/ProgramData/miniconda3/Scripts/conda.exe run -n moss-asr python -m pip instal
 
 ## 隐身
 
-内容保护（标题栏「隐身」开关，默认开启）让窗口在 Windows 的 OBS、屏幕共享、截图中不可见。全局快捷键默认 **Control+B**（隐藏/呼出）、**Control+Shift+S**（框选截图问答）。
+内容保护（标题栏「隐身」开关，默认开启）让窗口在 Windows 的 OBS、屏幕共享、截图中不可见。
+
+全局快捷键（默认值，设置里可改或清空）。程序运行期间，这些组合键不会再传给其他程序：
+
+| 快捷键 | 作用 |
+| --- | --- |
+| Control+B | 隐藏 / 呼出窗口 |
+| Control+方向键 | 窗口移动 40 px |
+| Control+S | 开始采集系统声音 |
+| Control+H | 框选截图加入视觉上下文队列（拖动，或在两个角各按一次 Control+Shift+A；Esc 取消） |
+| Control+L | 删除队列里最后一张截图 |
+| Control+R | 清空截图队列 |
+| Control+Enter | 立即回答：上次回答之后面试官的话 + 队列里的截图 |
+| Control+D | 清空本会话回答 |
+| Control+T | 清空本会话转录 |
 
 ## 数据位置
 

@@ -10,6 +10,7 @@ import {
   plainCipher,
   type SecretCipher,
 } from '../electron/settings';
+import { defaultHotkeysForPlatform } from '../shared/platform';
 import type { SettingsFile } from '../shared/protocol';
 
 const fakeCipher: SecretCipher = {
@@ -50,6 +51,16 @@ describe('SettingsStore', () => {
     writeFileSync(file, '{"llm": {broken json', 'utf8');
     const s = new SettingsStore(file, fakeCipher);
     expect(s.data).toEqual(defaultSettings());
+  });
+
+  it('moves the pre-R6 default screenshot hotkey to the current default, keeps a custom one', () => {
+    // every pre-R6 profile has the old default on disk: save() writes all fields
+    writeFileSync(file, JSON.stringify({ version: 2, ui: { hotkeyShot: 'Control+Shift+S' } }), 'utf8');
+    expect(new SettingsStore(file, fakeCipher).data.ui.hotkeyShot).toBe(
+      defaultHotkeysForPlatform(process.platform).hotkeyShot,
+    );
+    writeFileSync(file, JSON.stringify({ version: 2, ui: { hotkeyShot: 'Alt+W' } }), 'utf8');
+    expect(new SettingsStore(file, fakeCipher).data.ui.hotkeyShot).toBe('Alt+W');
   });
 
   it('round-trips a patch to disk', () => {
@@ -258,16 +269,15 @@ describe('migrateSettingsV1ToV2 (pure)', () => {
     expect(v2.vision.proxyUrl).toBe('127.0.0.1:7897');
     expect(v2.asr.backend).toBe('cloud-realtime');
     expect(v2.asr.realtime?.baseUrl).toBe(V1_FILE.asr.realtime.baseUrl);
-    // Phase 4 added two ui fields, and R6 added two screenshot-queue hotkeys.
-    // Everything the user had configured survives untouched; the new ones
-    // arrive with their defaults (auto-start OFF; undo/clear get their
-    // platform defaults since a v1 file never had them to preserve).
+    // Phase 4 added two ui fields, and R6 added the queue/answer/window
+    // hotkeys. Everything the user had configured survives untouched; the new
+    // ones arrive with their defaults (auto-start OFF; hotkeys a v1 file never
+    // had get their platform defaults).
     expect(v2.ui).toEqual({
+      ...defaultHotkeysForPlatform(process.platform),
       ...V1_FILE.ui,
       autoLaunch: false,
       trayNoticeShown: false,
-      hotkeyShotUndo: 'Control+L',
-      hotkeyShotClear: 'Control+R',
     });
     expect(v2.audio).toEqual(V1_FILE.audio);
   });

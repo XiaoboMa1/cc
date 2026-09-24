@@ -1,14 +1,16 @@
 import { useEffect, useState } from 'react';
-import type {
-  AnswerLang,
-  AsrLanguage,
-  FontScale,
-  ProviderSlot,
-  ProviderTestResult,
-  ProviderVerification,
-  PublicSettings,
-  ThemeMode,
-  UiLang,
+import {
+  HOTKEY_FIELDS,
+  type AnswerLang,
+  type AsrLanguage,
+  type FontScale,
+  type HotkeySettings,
+  type ProviderSlot,
+  type ProviderTestResult,
+  type ProviderVerification,
+  type PublicSettings,
+  type ThemeMode,
+  type UiLang,
 } from '../../shared/protocol';
 import {
   LOCAL_REALTIME_MODELS,
@@ -136,7 +138,9 @@ export function SettingsPanel({
   const [model, setModel] = useState(settings.llm.model);
   const [answerLang, setAnswerLang] = useState<AnswerLang>(settings.llm.answerLang);
   const [language, setLanguage] = useState<AsrLanguage>(settings.asr.language);
-  const [hotkey, setHotkey] = useState(settings.ui.hotkeyToggle);
+  const [hotkeys, setHotkeys] = useState<Record<string, string>>(() =>
+    Object.fromEntries(HOTKEY_FIELDS.map((k) => [k, settings.ui[k]])),
+  );
   const [visionBaseUrl, setVisionBaseUrl] = useState(settings.vision.baseUrl ?? '');
   const [visionModel, setVisionModel] = useState(settings.vision.model ?? '');
   const [visionProxy, setVisionProxy] = useState(settings.vision.proxyUrl ?? '');
@@ -148,9 +152,6 @@ export function SettingsPanel({
   const [rtLocalModel, setRtLocalModel] = useState(
     settings.asr.localRealtime.model ?? 'fun-asr-nano',
   );
-  const [hotkeyShot, setHotkeyShot] = useState(settings.ui.hotkeyShot);
-  const [hotkeyShotUndo, setHotkeyShotUndo] = useState(settings.ui.hotkeyShotUndo);
-  const [hotkeyShotClear, setHotkeyShotClear] = useState(settings.ui.hotkeyShotClear);
   const [autoLaunch, setAutoLaunch] = useState(settings.ui.autoLaunch);
   const [fontScale, setFontScale] = useState<FontScale>(settings.ui.fontScale ?? 'medium');
   const [theme, setTheme] = useState<ThemeMode>(settings.ui.theme ?? 'dark');
@@ -302,10 +303,7 @@ export function SettingsPanel({
           localRealtime: { model: rtLocalModel },
         },
         ui: {
-          hotkeyToggle: hotkey.trim(),
-          hotkeyShot: hotkeyShot.trim(),
-          hotkeyShotUndo: hotkeyShotUndo.trim(),
-          hotkeyShotClear: hotkeyShotClear.trim(),
+          ...(Object.fromEntries(HOTKEY_FIELDS.map((k) => [k, hotkeys[k].trim()])) as Partial<HotkeySettings>),
           fontScale,
           theme,
           lang: uiLang,
@@ -634,34 +632,17 @@ export function SettingsPanel({
         </select>
       </div>
 
-      <div className="settings-row">
-        <label>{t.settings.hotkeyToggle}</label>
-        <input value={hotkey} onChange={(e) => setHotkey(e.target.value)} spellCheck={false} />
-      </div>
-      <div className="settings-row">
-        <label>{t.settings.hotkeyShot}</label>
-        <input
-          value={hotkeyShot}
-          onChange={(e) => setHotkeyShot(e.target.value)}
-          spellCheck={false}
-        />
-      </div>
-      <div className="settings-row">
-        <label>{t.settings.hotkeyShotUndo}</label>
-        <input
-          value={hotkeyShotUndo}
-          onChange={(e) => setHotkeyShotUndo(e.target.value)}
-          spellCheck={false}
-        />
-      </div>
-      <div className="settings-row">
-        <label>{t.settings.hotkeyShotClear}</label>
-        <input
-          value={hotkeyShotClear}
-          onChange={(e) => setHotkeyShotClear(e.target.value)}
-          spellCheck={false}
-        />
-      </div>
+      {HOTKEY_FIELDS.map((k) => (
+        <div className="settings-row" key={k}>
+          <label>{t.settings[k]}</label>
+          <input
+            value={hotkeys[k]}
+            onChange={(e) => setHotkeys((h) => ({ ...h, [k]: e.target.value }))}
+            spellCheck={false}
+          />
+        </div>
+      ))}
+      <div className="settings-hint">{t.settings.hotkeysHint}</div>
       <div className="settings-row">
         <label>{t.settings.autoLaunch}</label>
         <select

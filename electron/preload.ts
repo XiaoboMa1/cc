@@ -65,11 +65,6 @@ export interface McApi {
   /** P1-5: fold a finished Q&A into the rolling memo ('' = keep the old one) */
   memoUpdate(p: { memo: string; question: string; answer: string }): Promise<string>;
   onLlmEvent(cb: (ev: LlmEvent) => void): () => void;
-  onShotHotkey(cb: () => void): () => void;
-  /** R6: the undo-last-screenshot hotkey was pressed */
-  onShotUndoHotkey(cb: () => void): () => void;
-  /** R6: the clear-screenshot-queue hotkey was pressed */
-  onShotClearHotkey(cb: () => void): () => void;
   /** R6: extraction result for a queued screenshot */
   onShotExtractEvent(cb: (ev: LlmEvent) => void): () => void;
   /** tray menu entries only the renderer can service (capture / session /
@@ -131,21 +126,6 @@ const api: McApi = {
     const listener = (_e: Electron.IpcRendererEvent, ev: LlmEvent) => cb(ev);
     ipcRenderer.on(IPC.llmEvent, listener);
     return () => ipcRenderer.removeListener(IPC.llmEvent, listener);
-  },
-  onShotHotkey: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on(IPC.shotHotkey, listener);
-    return () => ipcRenderer.removeListener(IPC.shotHotkey, listener);
-  },
-  onShotUndoHotkey: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on(IPC.shotUndoHotkey, listener);
-    return () => ipcRenderer.removeListener(IPC.shotUndoHotkey, listener);
-  },
-  onShotClearHotkey: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on(IPC.shotClearHotkey, listener);
-    return () => ipcRenderer.removeListener(IPC.shotClearHotkey, listener);
   },
   onShotExtractEvent: (cb) => {
     const listener = (_e: Electron.IpcRendererEvent, ev: LlmEvent) => cb(ev);

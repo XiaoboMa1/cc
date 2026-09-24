@@ -47,7 +47,6 @@ export const plainCipher: SecretCipher = {
 };
 
 export function defaultSettings(platform: string = process.platform): SettingsFile {
-  const hotkeys = defaultHotkeysForPlatform(platform);
   return {
     version: 2,
     // A brand new profile has never seen the wizard; the setup window owns
@@ -80,10 +79,7 @@ export function defaultSettings(platform: string = process.platform): SettingsFi
     },
     ui: {
       stealth: true,
-      hotkeyToggle: hotkeys.toggle,
-      hotkeyShot: hotkeys.shot,
-      hotkeyShotUndo: hotkeys.shotUndo,
-      hotkeyShotClear: hotkeys.shotClear,
+      ...defaultHotkeysForPlatform(platform),
       opacity: 0.94,
       // medium = 16px answer body (was 13px) — readable at a glance mid-interview
       fontScale: 'medium',
@@ -109,6 +105,14 @@ export function apiKeyHint(plain: string): string | undefined {
  * file survive (forward compatibility); missing ones get the default.
  */
 function mergeWithDefaults(raw: Partial<SettingsFile>, defaults: SettingsFile): SettingsFile {
+  const ui = { ...defaults.ui, ...raw.ui };
+  // Builds before the screenshot queue (R6) defaulted the screenshot hotkey to
+  // Control+Shift+S, and save() writes every field — so that value is on disk
+  // for every such profile and would keep Control+H from ever registering.
+  // Treated as the old default: it follows the current one.
+  if (ui.hotkeyShot === 'Control+Shift+S' || ui.hotkeyShot === 'Command+Shift+S') {
+    ui.hotkeyShot = defaults.ui.hotkeyShot;
+  }
   return {
     version: 2,
     onboarding: { ...defaults.onboarding, ...raw.onboarding, schemaVersion: 1 },
@@ -121,7 +125,7 @@ function mergeWithDefaults(raw: Partial<SettingsFile>, defaults: SettingsFile): 
       realtime: { ...defaults.asr.realtime, ...raw.asr?.realtime },
       localRealtime: { ...defaults.asr.localRealtime, ...raw.asr?.localRealtime },
     },
-    ui: { ...defaults.ui, ...raw.ui },
+    ui,
     audio: { ...defaults.audio, ...raw.audio },
   };
 }

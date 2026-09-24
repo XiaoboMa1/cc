@@ -61,8 +61,9 @@ import {
   buildVisionMessages,
   clampMemo,
 } from './llm/prompts';
-import type { AppInfo, PublicSettings, UiLang } from '../shared/protocol';
+import type { AppInfo, HotkeyAction, PublicSettings, UiLang } from '../shared/protocol';
 import {
+  HOTKEY_FIELDS,
   IPC,
   type AsrEvent,
   type LlmAskPayload,
@@ -84,6 +85,21 @@ const MODEL_ID = 'onnx-community/whisper-large-v3-turbo-ONNX';
  * documentation link. */
 const RELEASES_URL = 'https://github.com/JWM0203/MeetingCopilot/releases/latest';
 
+/** how far one hotkeyMove+arrow press moves the overlay */
+const MOVE_STEP_PX = 40;
+
+/** marks a region corner at the mouse position while the region overlay is
+ * up (press at corner 1, move, press at corner 2) — selection without a click */
+const REGION_CORNER_KEY = 'CommandOrControl+Shift+A';
+
+/**
+ * Run a globalShortcut callback's work in a timer task: executeJavaScript
+ * called straight from the callback was measured reaching the renderer only
+ * at the next input event, 0.4–1.8 s after the key press (Electron 41, X11);
+ * from a timer task it arrives within a few ms.
+ */
+const deferred = (fn: () => void) => () => void setTimeout(fn, 0);
+
 /** Region-selection overlay: shows the captured screen as an opaque bg (so a
  * content-protected window never renders black locally) and lets the user drag
  * a rectangle. Uses window.mc from the shared preload. */
@@ -101,7 +117,8 @@ html,body{margin:0;height:100%;overflow:hidden;cursor:crosshair;user-select:none
 let sx,sy,drag=false;const sel=document.getElementById('sel'),dim=document.getElementById('dim');
 function rect(e){return{x:Math.min(sx,e.clientX),y:Math.min(sy,e.clientY),width:Math.abs(e.clientX-sx),height:Math.abs(e.clientY-sy)};}
 function upd(e){const r=rect(e);sel.style.left=r.x+'px';sel.style.top=r.y+'px';sel.style.width=r.width+'px';sel.style.height=r.height+'px';}
-addEventListener('mousedown',e=>{drag=true;sx=e.clientX;sy=e.clientY;dim.style.display='none';sel.style.display='block';upd(e);});
+function anchor(x,y){drag=true;sx=x;sy=y;dim.style.display='none';sel.style.display='block';upd({clientX:x,clientY:y});}
+addEventListener('mousedown',e=>anchor(e.clientX,e.clientY));
 addEventListener('mousemove',e=>{if(drag)upd(e);});
 addEventListener('mouseup',e=>{if(!drag)return;drag=false;const r=rect(e);if(r.width>4&&r.height>4)window.mc.regionRect(r);else window.mc.regionCancel();});
 addEventListener('keydown',e=>{if(e.key==='Escape')window.mc.regionCancel();});
@@ -356,29 +373,47 @@ function bootstrap(): void {
 
   function registerHotkeys(): void {
     globalShortcut.unregisterAll();
-    const toggle = settings.data.ui.hotkeyToggle;
-    const shot = settings.data.ui.hotkeyShot;
-    const shotUndo = settings.data.ui.hotkeyShotUndo;
-    const shotClear = settings.data.ui.hotkeyShotClear;
-    try {
-      if (toggle) {
-        const ok = globalShortcut.register(toggle, () => toggleWindow());
-        if (!ok) console.warn(`[main] hotkey ${toggle} registration failed (in use?)`);
+    const ui = settings.data.ui;
+    // renderer actions run through executeJavaScript(…, userGesture=true), not
+    // IPC: the capture hotkey ends in getDisplayMedia, which rejects without a
+    // user gesture (same reason as the MC_AUTOSTART hook)
+    const inRenderer = (action: HotkeyAction) => () =>
+      void win?.webContents
+        .executeJavaScript(`window.__mcHotkey && window.__mcHotkey(${JSON.stringify(action)})`, true)
+        .catch((e) => console.warn(`[main] hotkey ${action} failed:`, (e as Error).message));
+    const move = (dx: number, dy: number) => () => {
+      if (!win) return;
+      const [x, y] = win.getPosition();
+      win.setPosition(x + dx * MOVE_STEP_PX, y + dy * MOVE_STEP_PX);
+    };
+    const bindings: [string, () => void][] = [
+      [ui.hotkeyToggle, toggleWindow],
+      [ui.hotkeyShot, inRenderer('shot')],
+      [ui.hotkeyShotUndo, inRenderer('shotUndo')],
+      [ui.hotkeyShotClear, inRenderer('shotClear')],
+      [ui.hotkeyAnswer, inRenderer('answer')],
+      [ui.hotkeyCapture, inRenderer('capture')],
+      [ui.hotkeyClearAnswers, inRenderer('clearAnswers')],
+      [ui.hotkeyClearTranscript, inRenderer('clearTranscript')],
+    ];
+    if (ui.hotkeyMove) {
+      bindings.push(
+        [`${ui.hotkeyMove}+Up`, move(0, -1)],
+        [`${ui.hotkeyMove}+Down`, move(0, 1)],
+        [`${ui.hotkeyMove}+Left`, move(-1, 0)],
+        [`${ui.hotkeyMove}+Right`, move(1, 0)],
+      );
+    }
+    for (const [accel, fn] of bindings) {
+      if (!accel) continue;
+      // per binding: one malformed accelerator must not drop the rest
+      try {
+        if (!globalShortcut.register(accel, deferred(fn))) {
+          console.warn(`[main] hotkey ${accel} registration failed (in use?)`);
+        }
+      } catch (e) {
+        console.warn(`[main] hotkey ${accel} register error:`, (e as Error).message);
       }
-      if (shot) {
-        const ok = globalShortcut.register(shot, () => win?.webContents.send(IPC.shotHotkey));
-        if (!ok) console.warn(`[main] shot hotkey ${shot} registration failed (in use?)`);
-      }
-      if (shotUndo) {
-        const ok = globalShortcut.register(shotUndo, () => win?.webContents.send(IPC.shotUndoHotkey));
-        if (!ok) console.warn(`[main] shot-undo hotkey ${shotUndo} registration failed (in use?)`);
-      }
-      if (shotClear) {
-        const ok = globalShortcut.register(shotClear, () => win?.webContents.send(IPC.shotClearHotkey));
-        if (!ok) console.warn(`[main] shot-clear hotkey ${shotClear} registration failed (in use?)`);
-      }
-    } catch (e) {
-      console.warn('[main] hotkey register error:', (e as Error).message);
     }
   }
 
@@ -680,14 +715,7 @@ function bootstrap(): void {
     ipcMain.handle(IPC.asrReplay, () => ({ ready: asr.lastReady, status: asr.lastStatus }));
     ipcMain.handle(IPC.settingsSet, (_e, patch: SettingsPatch) => {
       settings.applyPatch(patch);
-      if (
-        patch.ui?.hotkeyToggle !== undefined ||
-        patch.ui?.hotkeyShot !== undefined ||
-        patch.ui?.hotkeyShotUndo !== undefined ||
-        patch.ui?.hotkeyShotClear !== undefined
-      ) {
-        registerHotkeys();
-      }
+      if (HOTKEY_FIELDS.some((k) => patch.ui?.[k] !== undefined)) registerHotkeys();
       if (patch.ui?.stealth !== undefined) {
         win?.setContentProtection(patch.ui.stealth);
       }
@@ -907,81 +935,114 @@ function bootstrap(): void {
     // on a STEALTH overlay that shows the capture as its (opaque) background —
     // avoids the transparent-window black-screen bug and is excluded from
     // recording via content protection. Returns the cropped image dataURL. ----
-    let regionResolve: ((r: { x: number; y: number; width: number; height: number } | null) => void) | null = null;
+    type RegionRect = { x: number; y: number; width: number; height: number };
+    let regionResolve: ((r: RegionRect | null) => void) | null = null;
     let pendingRegionImage: string | null = null;
     let regionWin: BrowserWindow | null = null;
+    let regionBusy = false;
 
-    ipcMain.handle(IPC.regionImage, () => pendingRegionImage);
-    ipcMain.on(IPC.regionRect, (_e, r) => {
+    /** end the selection — overlay drag, overlay/global Esc, or the corner key */
+    const finishRegion = (r: RegionRect | null) => {
       const f = regionResolve;
       regionResolve = null;
       regionWin?.close();
       f?.(r);
-    });
-    ipcMain.on(IPC.regionCancel, () => {
-      const f = regionResolve;
-      regionResolve = null;
-      regionWin?.close();
-      f?.(null);
-    });
+    };
+    ipcMain.handle(IPC.regionImage, () => pendingRegionImage);
+    ipcMain.on(IPC.regionRect, (_e, r: RegionRect) => finishRegion(r));
+    ipcMain.on(IPC.regionCancel, () => finishRegion(null));
 
     ipcMain.handle(IPC.regionPick, async () => {
-      const disp = screen.getPrimaryDisplay();
-      const sf = disp.scaleFactor;
-      const w = Math.round(disp.size.width * sf);
-      const h = Math.round(disp.size.height * sf);
-      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: w, height: h } });
-      const src = sources.find((s) => s.display_id === String(disp.id)) ?? sources[0];
-      if (!src) return null;
-      const full = src.thumbnail;
-      pendingRegionImage = full.toDataURL();
-
-      const rect = await new Promise<{ x: number; y: number; width: number; height: number } | null>((resolve) => {
-        regionResolve = resolve;
-        const b = disp.bounds;
-        const ov = new BrowserWindow({
-          x: b.x,
-          y: b.y,
-          width: b.width,
-          height: b.height,
-          frame: false,
-          alwaysOnTop: true,
-          skipTaskbar: true,
-          hasShadow: false,
-          resizable: false,
-          movable: false,
-          fullscreenable: false,
-          enableLargerThanScreen: true,
-          webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true },
-        });
-        regionWin = ov;
-        ov.setContentProtection(true); // selection overlay invisible to recording
-        ov.setAlwaysOnTop(true, 'screen-saver');
-        ov.on('closed', () => {
-          if (regionResolve) {
-            const f = regionResolve;
-            regionResolve = null;
-            f(null);
-          }
-          regionWin = null;
-        });
-        void ov.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(regionOverlayHtml(T().regionTip)));
-      });
-
-      const img = pendingRegionImage;
-      pendingRegionImage = null;
-      if (!rect || rect.width < 4 || rect.height < 4 || !img) return null;
+      // one selection at a time: a second screenshot-hotkey press mid-selection
+      // would stack a second overlay and leave the first one on screen with
+      // nothing able to close it
+      if (regionBusy) return null;
+      regionBusy = true;
       try {
-        const cropped = full.crop({
-          x: Math.round(rect.x * sf),
-          y: Math.round(rect.y * sf),
-          width: Math.round(rect.width * sf),
-          height: Math.round(rect.height * sf),
+        const disp = screen.getPrimaryDisplay();
+        const sf = disp.scaleFactor;
+        const w = Math.round(disp.size.width * sf);
+        const h = Math.round(disp.size.height * sf);
+        const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: w, height: h } });
+        const src = sources.find((s) => s.display_id === String(disp.id)) ?? sources[0];
+        if (!src) return null;
+        const full = src.thumbnail;
+        pendingRegionImage = full.toDataURL();
+
+        const rect = await new Promise<RegionRect | null>((resolve) => {
+          regionResolve = resolve;
+          const b = disp.bounds;
+          const ov = new BrowserWindow({
+            x: b.x,
+            y: b.y,
+            width: b.width,
+            height: b.height,
+            frame: false,
+            alwaysOnTop: true,
+            skipTaskbar: true,
+            hasShadow: false,
+            resizable: false,
+            movable: false,
+            fullscreenable: false,
+            enableLargerThanScreen: true,
+            webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true },
+          });
+          regionWin = ov;
+          ov.setContentProtection(true); // selection overlay invisible to recording
+          ov.setAlwaysOnTop(true, 'screen-saver');
+          // global only while selecting, so both work whichever window holds
+          // keyboard focus; corner 1 = cursor at the first press, corner 2 =
+          // cursor at the second (overlay coords = screen DIP - display origin,
+          // the same space as the drag's clientX/clientY)
+          let corner: { x: number; y: number } | null = null;
+          globalShortcut.register('Escape', deferred(() => finishRegion(null)));
+          globalShortcut.register(REGION_CORNER_KEY, deferred(() => {
+            const p = screen.getCursorScreenPoint();
+            const x = p.x - b.x;
+            const y = p.y - b.y;
+            if (!corner) {
+              corner = { x, y };
+              // the overlay draws the rectangle from here to the cursor
+              void ov.webContents.executeJavaScript(`anchor(${x},${y})`).catch(() => undefined);
+              return;
+            }
+            finishRegion({
+              x: Math.min(corner.x, x),
+              y: Math.min(corner.y, y),
+              width: Math.abs(x - corner.x),
+              height: Math.abs(y - corner.y),
+            });
+          }));
+          ov.on('closed', () => {
+            globalShortcut.unregister('Escape');
+            globalShortcut.unregister(REGION_CORNER_KEY);
+            if (regionResolve) {
+              const f = regionResolve;
+              regionResolve = null;
+              f(null);
+            }
+            regionWin = null;
+          });
+          void ov.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(regionOverlayHtml(T().regionTip)));
         });
-        return cropped.toDataURL();
-      } catch (e) {
-        console.error('[region] crop failed:', (e as Error).message);
-        return null;
+
+        const img = pendingRegionImage;
+        pendingRegionImage = null;
+        if (!rect || rect.width < 4 || rect.height < 4 || !img) return null;
+        try {
+          const cropped = full.crop({
+            x: Math.round(rect.x * sf),
+            y: Math.round(rect.y * sf),
+            width: Math.round(rect.width * sf),
+            height: Math.round(rect.height * sf),
+          });
+          return cropped.toDataURL();
+        } catch (e) {
+          console.error('[region] crop failed:', (e as Error).message);
+          return null;
+        }
+      } finally {
+        regionBusy = false;
       }
     });
     ipcMain.handle(IPC.stealthSet, (_e, on: boolean) => {

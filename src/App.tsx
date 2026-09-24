@@ -49,6 +49,10 @@ const MAX_TURNS = 200;
 // v2: only the last 8 turns ride along verbatim — the rolling memo carries
 // older context, keeping per-request tokens flat as the interview runs long
 const HISTORY_TURNS = 8;
+/** an answer waits at most this long for the interviewer sentence ASR is still finalizing */
+const PARTIAL_WAIT_MS = 3000;
+/** … and at most this long for queued screenshots still being extracted */
+const EXTRACT_WAIT_MS = 30000;
 
 let seq = 0;
 const uid = (p: string) => `${p}-${++seq}-${Date.now()}`;
@@ -100,6 +104,11 @@ export function App() {
   const sessionsRef = useRef<StoredSession[]>([]);
   const currentIdRef = useRef<string>('');
   const shotQueuesRef = useRef<Record<string, ShotQueueItem[]>>({});
+  const partialsRef = useRef<{ them?: string; me?: string }>({});
+  // per session: interviewer lines that ended at or before this Date.now() are
+  // already put to a continuous answer (K-A or the answer hotkey). A ref, not
+  // session state: both triggers can fire before React re-renders.
+  const answeredRef = useRef<Record<string, number>>({});
   const answerLangRef = useRef<AnswerLang>('chinese');
   const loaded = useRef(false);
 
@@ -115,6 +124,7 @@ export function App() {
   sessionsRef.current = sessions;
   currentIdRef.current = currentId;
   shotQueuesRef.current = shotQueues;
+  partialsRef.current = partials;
 
   const current = useMemo(
     () => sessions.find((s) => s.id === currentId) ?? null,
@@ -197,28 +207,69 @@ export function App() {
   );
 
   const askLlm = useCallback(
-    (mode: 'segment' | 'continuous' | 'free' | 'translate', text?: string) => {
+    async (mode: 'segment' | 'continuous' | 'free' | 'translate', text?: string) => {
       const sid = currentIdRef.current;
       if (!sid) return;
-      const requestId = uid('req');
-      const segs = sessionsRef.current.find((x) => x.id === sid)?.segments ?? [];
-      // continuous: resolve the actual question NOW — the other party's latest
-      // line — so the turn label (and thus session history) carries the real
-      // question instead of a constant '对方最新发言' (v1 history-label bug)
-      let question = text;
+      const askedAt = Date.now();
+      const answeredTs = answeredRef.current[sid] ?? 0;
       if (mode === 'continuous') {
-        for (let i = segs.length - 1; i >= 0; i--) {
-          if ((segs[i].speaker ?? 'them') === 'them') {
-            question = segs[i].text;
-            break;
-          }
+        // nothing arrived since the previous continuous answer — the other
+        // trigger got here first, or the hotkey was pressed twice: no repeat
+        const segsNow = sessionsRef.current.find((x) => x.id === sid)?.segments ?? [];
+        const anyNew =
+          segsNow.some((g) => (g.speaker ?? 'them') === 'them' && g.endTs > answeredTs) ||
+          !!partialsRef.current.them ||
+          (shotQueuesRef.current[sid] ?? []).some((it) => it.at > answeredTs);
+        if (!anyNew) return;
+        answeredRef.current[sid] = askedAt;
+      }
+      const requestId = uid('req');
+      appendTurn(sid, {
+        id: requestId,
+        kind: mode,
+        label: text ?? (mode === 'continuous' ? tRef.current.app.latestRemark : ''),
+        text: '',
+        status: 'streaming',
+      });
+      if (mode === 'segment' || mode === 'free') maybeTitle(sid, text);
+
+      // Wait for input the user has already given: the interviewer sentence
+      // ASR is still finalizing (a partial turns into a segment ~1 s after
+      // speech ends) and screenshots still being extracted. Sending at once
+      // would leave out the question just asked / the screenshot just taken.
+      if (mode === 'segment' || mode === 'continuous') {
+        const pending = () =>
+          (mode === 'continuous' && !!partialsRef.current.them && Date.now() - askedAt < PARTIAL_WAIT_MS) ||
+          ((shotQueuesRef.current[sid] ?? []).some((it) => it.status === 'extracting') &&
+            Date.now() - askedAt < EXTRACT_WAIT_MS);
+        if (pending()) {
+          while (pending()) await new Promise((r) => setTimeout(r, 150));
+          // stopped or cleared while waiting
+          const turn = sessionsRef.current.find((x) => x.id === sid)?.turns.find((x) => x.id === requestId);
+          if (turn?.status !== 'streaming') return;
         }
       }
-      const label = question ?? (mode === 'continuous' ? tRef.current.app.latestRemark : '');
-      appendTurn(sid, { id: requestId, kind: mode, label, text: '', status: 'streaming' });
-      if (mode === 'segment' || mode === 'free') maybeTitle(sid, text);
-      const material = mode === 'translate' ? {} : currentMaterial();
+
+      const segs = sessionsRef.current.find((x) => x.id === sid)?.segments ?? [];
       const recentSegs = segs.slice(-30);
+      let question = text;
+      if (mode === 'continuous') {
+        // continuous (auto trigger or the answer hotkey): the question is every
+        // interviewer line since the previous continuous answer, so one asked
+        // over several sentences is answered as one — the turn label (and so
+        // the session history) carries it instead of a constant '对方最新发言'.
+        // Only new screenshots: the latest interviewer line again.
+        const theirs = recentSegs.filter((g) => (g.speaker ?? 'them') === 'them');
+        const fresh = theirs.filter((g) => g.endTs > answeredTs);
+        question = (fresh.length ? fresh : theirs.slice(-1)).map((g) => g.text).join('\n') || undefined;
+        answeredRef.current[sid] = Math.max(answeredRef.current[sid] ?? 0, ...fresh.map((g) => g.endTs));
+        const label = question ?? tRef.current.app.latestRemark;
+        patchSession(sid, (s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === requestId ? { ...t, label } : t)),
+        }));
+      }
+      const material = mode === 'translate' ? {} : currentMaterial();
       // R6: cached extraction (E) from every screenshot currently queued for
       // this session — folded in as "visual context" (segment/continuous only)
       const visualContext =
@@ -242,7 +293,7 @@ export function App() {
       };
       window.mc.llmAsk(payload);
     },
-    [appendTurn, buildHistory, currentMaterial, maybeTitle],
+    [appendTurn, buildHistory, currentMaterial, maybeTitle, patchSession],
   );
 
   const askShot = useCallback(
@@ -281,7 +332,10 @@ export function App() {
     const sid = currentIdRef.current;
     if (!sid) return;
     const id = uid('shot');
-    setShotQueues((q) => ({ ...q, [sid]: [...(q[sid] ?? []), { id, dataUrl: img, status: 'extracting' }] }));
+    setShotQueues((q) => ({
+      ...q,
+      [sid]: [...(q[sid] ?? []), { id, dataUrl: img, status: 'extracting', at: Date.now() }],
+    }));
     window.mc.shotExtract({ requestId: id, imageDataUrl: img });
   }, []);
 
@@ -404,9 +458,6 @@ export function App() {
       }
     });
 
-    const offShot = window.mc.onShotHotkey(() => void captureShot());
-    const offShotUndo = window.mc.onShotUndoHotkey(() => undoLastShot());
-    const offShotClear = window.mc.onShotClearHotkey(() => clearShotQueue());
     const offShotExtract = window.mc.onShotExtractEvent((ev) => {
       setShotQueues((q) => {
         const next: Record<string, ShotQueueItem[]> = {};
@@ -430,9 +481,6 @@ export function App() {
     return () => {
       off();
       offLlm();
-      offShot();
-      offShotUndo();
-      offShotClear();
       offShotExtract();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -483,7 +531,11 @@ export function App() {
     if (!continuous || !lastSeg) return;
     if ((lastSeg.speaker ?? 'them') !== 'them') return; // ignore my own voice
     if (!isLikelyQuestion(lastSeg.text)) return;
-    const timer = setTimeout(() => askLlm('continuous'), 1100);
+    const timer = setTimeout(() => {
+      // already covered by an answer asked after this line ended (the answer
+      // hotkey pressed within the 1.1 s, or while that answer waited on ASR)
+      if ((answeredRef.current[currentIdRef.current] ?? 0) < lastSeg.endTs) void askLlm('continuous');
+    }, 1100);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [continuous, lastSeg?.id, lastSeg?.endTs]);
@@ -630,6 +682,10 @@ export function App() {
     patchSession(currentIdRef.current, (s) => ({ ...s, segments: [] }));
   }, [patchSession]);
 
+  const clearAnswers = useCallback(() => {
+    patchSession(currentIdRef.current, (s) => ({ ...s, turns: [] }));
+  }, [patchSession]);
+
   const cancelTurn = useCallback(
     (id: string) => {
       window.mc.llmCancel(id);
@@ -715,6 +771,52 @@ export function App() {
       }
     });
   }, [capturing, asr.phase, startCapture, stopCapture, createSession, closePanels]);
+
+  /**
+   * Global hotkeys acting on renderer state (electron/main.ts registerHotkeys
+   * calls window.__mcHotkey). Re-bound whenever the capture gate changes,
+   * like the tray handler above.
+   */
+  useEffect(() => {
+    window.__mcHotkey = (action) => {
+      switch (action) {
+        case 'shot':
+          void captureShot();
+          return;
+        case 'shotUndo':
+          undoLastShot();
+          return;
+        case 'shotClear':
+          clearShotQueue();
+          return;
+        case 'answer':
+          void askLlm('continuous');
+          return;
+        case 'capture':
+          if (!capturing && asr.phase === 'ready') void startCapture();
+          return;
+        case 'clearAnswers':
+          clearAnswers();
+          return;
+        case 'clearTranscript':
+          clearTranscript();
+          return;
+      }
+    };
+    return () => {
+      window.__mcHotkey = undefined;
+    };
+  }, [
+    capturing,
+    asr.phase,
+    startCapture,
+    askLlm,
+    captureShot,
+    undoLastShot,
+    clearShotQueue,
+    clearAnswers,
+    clearTranscript,
+  ]);
 
   const pickKb = useCallback(
     async (slot: KbSlot) => {
@@ -995,7 +1097,7 @@ export function App() {
           onPickKb={(slot) => void pickKb(slot)}
           onClearKb={clearKb}
           onCancel={cancelTurn}
-          onClear={() => patchSession(currentIdRef.current, (s) => ({ ...s, turns: [] }))}
+          onClear={clearAnswers}
           onFreeAsk={(q) => askLlm('free', q)}
           onShotAsk={askShot}
           shotQueue={currentShotQueue}
