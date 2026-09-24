@@ -19,6 +19,7 @@ export function defaultHotkeysForPlatform(platform: string): HotkeySettings {
     hotkeyShotUndo: `${mod}+L`,
     hotkeyShotClear: `${mod}+R`,
     hotkeyAnswer: `${mod}+Enter`,
+    hotkeyFreeAsk: `${mod}+M`,
     hotkeyCapture: `${mod}+S`,
     hotkeyClearAnswers: `${mod}+D`,
     hotkeyClearTranscript: `${mod}+T`,

@@ -5,12 +5,11 @@ import {
   formatPromptLogError,
   formatPromptLogRequest,
   formatPromptLogResponse,
-  formatTranscriptLogLines,
   syncPromptLogSession,
-  type TranscriptLogLine,
 } from '../electron/promptLog';
+import type { TranscriptLine } from '../shared/protocol';
 
-function line(id: number, speaker: 'them' | 'me', text: string): TranscriptLogLine {
+function line(id: number, speaker: 'them' | 'me', text: string): TranscriptLine {
   return { id, speaker, text };
 }
 
@@ -64,15 +63,6 @@ describe('syncPromptLogSession', () => {
     const { newLines, carriedOverCount } = diffTranscriptForLog('s1', [line(1, 'them', 'a'), line(2, 'me', 'b')]);
     expect(newLines).toEqual([]);
     expect(carriedOverCount).toBe(2);
-  });
-});
-
-describe('formatTranscriptLogLines', () => {
-  it('mirrors shared/transcript speakerMarker output', () => {
-    expect(formatTranscriptLogLines([line(1, 'them', 'hi'), line(2, 'me', 'yo')])).toEqual([
-      '### interviewer: hi',
-      '### interviewee: yo',
-    ]);
   });
 });
 

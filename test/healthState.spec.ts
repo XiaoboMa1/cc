@@ -29,7 +29,6 @@ function settings(over: Partial<PublicSettings> = {}): PublicSettings {
     llm: {
       baseUrl: 'https://api.deepseek.com/v1',
       model: 'deepseek-chat',
-      answerLang: 'chinese',
       answerWithVision: false,
       apiKeySet: true,
     },

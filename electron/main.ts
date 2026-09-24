@@ -43,7 +43,6 @@ import {
   formatPromptLogError,
   formatPromptLogRequest,
   formatPromptLogResponse,
-  formatTranscriptLogLines,
   syncPromptLogSession,
 } from './promptLog';
 import { SessionStore } from './sessions';
@@ -60,8 +59,9 @@ import {
   buildTranslateMessages,
   buildVisionMessages,
   clampMemo,
+  type AnswerPromptInput,
 } from './llm/prompts';
-import type { AppInfo, HotkeyAction, PublicSettings, UiLang } from '../shared/protocol';
+import type { AppInfo, HotkeyAction, InterviewType, PublicSettings, UiLang } from '../shared/protocol';
 import {
   HOTKEY_FIELDS,
   IPC,
@@ -392,6 +392,7 @@ function bootstrap(): void {
       [ui.hotkeyShotUndo, inRenderer('shotUndo')],
       [ui.hotkeyShotClear, inRenderer('shotClear')],
       [ui.hotkeyAnswer, inRenderer('answer')],
+      [ui.hotkeyFreeAsk, inRenderer('freeAsk')],
       [ui.hotkeyCapture, inRenderer('capture')],
       [ui.hotkeyClearAnswers, inRenderer('clearAnswers')],
       [ui.hotkeyClearTranscript, inRenderer('clearTranscript')],
@@ -457,7 +458,7 @@ function bootstrap(): void {
       // E2E: exercise the FULL renderer->IPC->main->LLM->stream->renderer path.
       if (process.env.MC_E2E_LLM) {
         const q = process.env.MC_E2E_LLM;
-        const js = `(async()=>{const d=[];const done=new Promise(r=>{const off=window.mc.onLlmEvent(e=>{if(e.kind==='delta')d.push(e.text);else if(e.kind==='done'){off();r({ok:true,text:e.text||d.join('')});}else if(e.kind==='error'){off();r({ok:false,error:e.message});}});});window.mc.llmAsk({requestId:'e2e-llm',mode:'free',freeQuestion:${JSON.stringify(q)},recentTranscript:[]});return await done;})()`;
+        const js = `(async()=>{const d=[];const done=new Promise(r=>{const off=window.mc.onLlmEvent(e=>{if(e.kind==='delta')d.push(e.text);else if(e.kind==='done'){off();r({ok:true,text:e.text||d.join('')});}else if(e.kind==='error'){off();r({ok:false,error:e.message});}});});window.mc.llmAsk({requestId:'e2e-llm',mode:'free',freeQuestion:${JSON.stringify(q)},transcript:[]});return await done;})()`;
         void win?.webContents
           .executeJavaScript(js, true)
           .then((r) => console.log('[e2e-llm]', JSON.stringify(r)))
@@ -640,10 +641,10 @@ function bootstrap(): void {
     let keepWarmTimer: NodeJS.Timeout | null = null;
 
     /** same material fallback as llmAsk — prewarm MUST match real requests byte-for-byte */
-    function stablePrefixFor(resume?: string, jd?: string): string {
+    function stablePrefixFor(type: InterviewType, resume?: string, jd?: string): string {
       const hasMaterial = !!(resume || jd);
       const effResume = resume || (hasMaterial ? '' : knowledge.text);
-      return buildStablePrefix(effResume, jd ?? '', settings.data.llm.answerLang);
+      return buildStablePrefix(type, effResume, jd ?? '');
     }
 
     async function doPrewarm(prefix: string, reason: string): Promise<void> {
@@ -667,8 +668,11 @@ function bootstrap(): void {
 
     ipcMain.on(
       IPC.llmPrewarm,
-      (_e, payload: { resume?: string; jd?: string; immediate?: boolean } = {}) => {
-        const prefix = stablePrefixFor(payload.resume, payload.jd);
+      (
+        _e,
+        payload: { resume?: string; jd?: string; interviewType?: InterviewType; immediate?: boolean } = {},
+      ) => {
+        const prefix = stablePrefixFor(payload.interviewType ?? 'tech', payload.resume, payload.jd);
         const dirty = prefix !== lastPrefix;
         const cold = Date.now() - lastPrefixActivity >= PREWARM_IDLE_MS;
         if (!dirty && !cold) return;
@@ -1068,39 +1072,28 @@ function bootstrap(): void {
       // session dual-slot material first; the global default KB only fills in
       // when the session has nothing (translate stays a clean pass-through)
       const hasMaterial = !!(payload.resume || payload.jd || payload.background);
-      const messages = buildAnswerMessages({
+      const promptInput: AnswerPromptInput = {
         mode: payload.mode,
         question: payload.question,
         freeQuestion: payload.freeQuestion,
-        recentTranscript: payload.recentTranscript,
-        answerLang: payload.answerLang ?? settings.data.llm.answerLang,
+        transcript: payload.transcript ?? [],
+        interviewType: payload.interviewType,
         history: payload.history,
         resume: isTranslate ? undefined : payload.resume,
         jd: isTranslate ? undefined : payload.jd,
         memo: isTranslate ? undefined : payload.memo,
         background: isTranslate ? undefined : payload.background || (hasMaterial ? undefined : knowledge.text),
         visualContext: isTranslate ? undefined : payload.visualContext,
-      });
+      };
+      const messages = buildAnswerMessages(promptInput);
 
       if (PROMPT_LOG_PATH) {
         const sid = payload.sessionId ?? 'unknown-session';
-        const { newLines, carriedOverCount } = diffTranscriptForLog(sid, payload.transcriptForLog ?? []);
+        const { newLines, carriedOverCount } = diffTranscriptForLog(sid, promptInput.transcript);
         // same builder as the real call, transcript window swapped for only
         // the not-yet-logged lines — guarantees the logged shape can never
         // drift from what buildAnswerMessages actually produces
-        const logMessages = buildAnswerMessages({
-          mode: payload.mode,
-          question: payload.question,
-          freeQuestion: payload.freeQuestion,
-          recentTranscript: formatTranscriptLogLines(newLines),
-          answerLang: payload.answerLang ?? settings.data.llm.answerLang,
-          history: payload.history,
-          resume: isTranslate ? undefined : payload.resume,
-          jd: isTranslate ? undefined : payload.jd,
-          memo: isTranslate ? undefined : payload.memo,
-          background: isTranslate ? undefined : payload.background || (hasMaterial ? undefined : knowledge.text),
-          visualContext: isTranslate ? undefined : payload.visualContext,
-        });
+        const logMessages = buildAnswerMessages({ ...promptInput, transcript: newLines });
         appendPromptLog(
           formatPromptLogRequest({
             at: new Date().toISOString(),
@@ -1125,7 +1118,7 @@ function bootstrap(): void {
 
       // a real answer request refreshes the provider-side prefix cache itself
       if (!isTranslate && !useVision && payload.mode !== 'free') {
-        lastPrefix = stablePrefixFor(payload.resume || payload.background, payload.jd);
+        lastPrefix = stablePrefixFor(payload.interviewType ?? 'tech', payload.resume || payload.background, payload.jd);
         lastPrefixActivity = Date.now();
       }
 

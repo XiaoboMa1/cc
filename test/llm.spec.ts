@@ -19,17 +19,20 @@ import {
   buildVisionMessages,
   clampMemo,
   clampTranscript,
-  classifyQuestion,
-  isLikelyQuestion,
-  langDirective,
-  questionHint,
   smartClip,
   JD_PRIORITY,
   MAX_BACKGROUND_CHARS,
   MAX_CONTEXT_CHARS,
   MAX_MEMO_CHARS,
+  PROMPT_HR,
+  PROMPT_TECH,
   RESUME_PRIORITY,
 } from '../electron/llm/prompts';
+import { isLikelyQuestion } from '../shared/textHeuristics';
+import type { TranscriptLine } from '../shared/protocol';
+
+const line = (id: number, speaker: 'them' | 'me', text: string): TranscriptLine => ({ id, speaker, text });
+const lastUser = (msgs: ChatMessage[]) => msgs[msgs.length - 1].content as string;
 
 describe('SseParser', () => {
   it('parses complete events', () => {
@@ -66,142 +69,141 @@ describe('extractDelta', () => {
   });
 });
 
-describe('buildAnswerMessages', () => {
-  it('segment mode quotes the target sentence and includes context', () => {
+describe('buildAnswerMessages (segment / continuous)', () => {
+  it('puts the question in <question> after the conversation and ends with the instruction', () => {
     const msgs = buildAnswerMessages({
       mode: 'segment',
-      question: '你们的核心优势是什么？',
-      recentTranscript: ['我们先自我介绍', '你们的核心优势是什么？'],
+      question: 'What is the time complexity?',
+      transcript: [line(1, 'them', 'Here is the problem.'), line(2, 'them', 'What is the time complexity?')],
     });
     expect(msgs[0].role).toBe('system');
-    expect(msgs[1].content).toContain('你们的核心优势是什么？');
-    expect(msgs[1].content).toContain('我们先自我介绍');
+    const user = lastUser(msgs);
+    expect(user).toContain('<question>\nWhat is the time complexity?\n</question>');
+    expect(user.indexOf('<conversation>')).toBeLessThan(user.indexOf('<question>'));
+    expect(user.endsWith('Answer the <question> now, in the words I will say.')).toBe(true);
   });
 
-  it('continuous mode without a resolved question falls back to the latest speech', () => {
-    const msgs = buildAnswerMessages({ mode: 'continuous', recentTranscript: ['刚才那句'] });
-    expect(msgs[1].content).toContain('面试官最新的话');
-  });
-
-  it('continuous mode with the resolved question quotes it (v1 label bug fix)', () => {
+  it('groups consecutive lines of one speaker into one element', () => {
     const msgs = buildAnswerMessages({
       mode: 'continuous',
-      question: '你为什么从上一家公司离职？',
-      recentTranscript: ['寒暄', '你为什么从上一家公司离职？'],
+      question: 'what about another case',
+      transcript: [
+        line(1, 'them', 'let me give you an example. if i'),
+        line(2, 'them', 'what is the number of the operations needed?'),
+        line(3, 'me', 'I think n minus one.'),
+        line(4, 'them', 'what about another case'),
+      ],
     });
-    const user = msgs[msgs.length - 1].content as string;
-    expect(user).toContain('你为什么从上一家公司离职？');
-    expect(user).not.toContain('对方最新发言');
+    expect(lastUser(msgs)).toContain(
+      '<conversation>\n<interviewer>\nlet me give you an example. if i\nwhat is the number of the operations needed?\n</interviewer>\n' +
+        '<interviewee>\nI think n minus one.\n</interviewee>\n<interviewer>\nwhat about another case\n</interviewer>\n</conversation>',
+    );
   });
 
-  it('teleprompter persona: first-person, read-aloud output', () => {
-    const msgs = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [] });
-    const sys = msgs[0].content as string;
-    expect(sys).toContain('提词');
-    expect(sys).toContain('第一人称');
-    expect(sys).toContain('照着念');
-    expect(sys).toContain('绝不编造');
+  it('omits empty blocks instead of printing a placeholder', () => {
+    const user = lastUser(buildAnswerMessages({ mode: 'continuous', question: 'q', transcript: [], visualContext: [] }));
+    expect(user).not.toContain('<conversation>');
+    expect(user).not.toContain('<visual_context>');
+    expect(user.startsWith('<question>')).toBe(true);
+  });
+
+  it('without a question it answers from the screen and the conversation', () => {
+    const user = lastUser(buildAnswerMessages({ mode: 'continuous', transcript: [], visualContext: ['Two Sum'] }));
+    expect(user).not.toContain('<question>');
+    expect(user).toContain('No question has been asked aloud yet');
+  });
+
+  it('leaves < and > in transcript and screenshot text unescaped', () => {
+    const user = lastUser(
+      buildAnswerMessages({
+        mode: 'segment',
+        question: 'q',
+        transcript: [line(1, 'them', 'use a vector<int> here')],
+        visualContext: ['Map<String, Integer> counts'],
+      }),
+    );
+    expect(user).toContain('vector<int>');
+    expect(user).toContain('Map<String, Integer>');
   });
 
   it('free mode passes the user question through', () => {
+    const msgs = buildAnswerMessages({ mode: 'free', freeQuestion: 'Summarize the conversation', transcript: [] });
+    // no context/material => no system prompt at all, just the raw question
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toEqual({ role: 'user', content: 'Summarize the conversation' });
+  });
+
+  it('free mode offers material as reference only, never the teleprompter prompt (truthful model identity)', () => {
     const msgs = buildAnswerMessages({
       mode: 'free',
-      freeQuestion: '帮我总结一下刚才的对话',
-      recentTranscript: [],
+      freeQuestion: 'Which model are you?',
+      transcript: [line(1, 'them', 'some talk')],
+      background: 'my resume',
     });
-    // no context/KB => no system prompt at all, just the raw question
-    expect(msgs).toHaveLength(1);
-    expect(msgs[0].role).toBe('user');
-    expect(msgs[0].content).toBe('帮我总结一下刚才的对话');
+    const sys = msgs[0].content as string;
+    expect(sys).toContain('Reference material');
+    expect(sys).toContain('<resume>\nmy resume\n</resume>');
+    expect(sys).toContain('<interviewer>\nsome talk\n</interviewer>');
+    expect(sys).not.toContain('teleprompter');
+    expect(lastUser(msgs)).toBe('Which model are you?');
+  });
+});
+
+describe('interview type picks the system prompt', () => {
+  it('hr uses PROMPT_HR; tech and the default use PROMPT_TECH', () => {
+    const ask = (interviewType?: 'hr' | 'tech') =>
+      buildAnswerMessages({ mode: 'segment', question: 'q', transcript: [], interviewType })[0].content;
+    expect(ask('hr')).toBe(PROMPT_HR);
+    expect(ask('tech')).toBe(PROMPT_TECH);
+    expect(ask()).toBe(PROMPT_TECH);
   });
 
-  it('free mode does NOT inject the meeting-assistant persona (truthful model identity)', () => {
-    const withCtx = buildAnswerMessages({
-      mode: 'free',
-      freeQuestion: '你是什么模型',
-      recentTranscript: ['对方说了些话'],
-      background: '我的简历',
-    });
-    const joined = JSON.stringify(withCtx);
-    expect(joined).not.toContain('实时会议/面试助手');
-    expect(joined).not.toContain('帮用户想好接下来怎么回答');
-    // reference material is offered, not a persona
-    expect(joined).toContain('供参考');
-    expect(withCtx[withCtx.length - 1].content).toBe('你是什么模型');
+  it('sets the default length of each interview type', () => {
+    expect(PROMPT_HR).toContain('240-350 words');
+    expect(PROMPT_TECH).toContain('400 words or more');
   });
 
-  it('answerLang hook steers the reply language (default chinese)', () => {
-    const zh = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [] });
-    expect(zh[0].content).toContain('【中文】');
-    expect(zh[0].content).not.toContain('【英文】');
+  it('carries the anti-AI-wording rules at system level in both prompts', () => {
+    for (const p of [PROMPT_HR, PROMPT_TECH]) {
+      expect(p).toContain('<style>');
+      expect(p).toContain('Who else could say it?');
+      expect(p).toContain('"A, not B"');
+      expect(p).toContain('<input_format>');
+    }
+  });
 
-    const en = buildAnswerMessages({
-      mode: 'segment',
-      question: 'x',
-      recentTranscript: [],
-      answerLang: 'english',
-    });
-    expect(en[0].content).toContain('【英文】');
-    expect(en[0].content).not.toContain('- 用【中文】回答');
-
-    const enCont = buildAnswerMessages({
-      mode: 'continuous',
-      recentTranscript: ['a'],
-      answerLang: 'english',
-    });
-    expect(enCont[0].content).toContain('【英文】');
+  it('is English only', () => {
+    for (const p of [PROMPT_HR, PROMPT_TECH]) expect(p).not.toMatch(/[一-鿿]/);
   });
 });
 
 describe('buildAnswerMessages visual context (R6: queued-screenshot E)', () => {
-  it('folds cached extractions in as a numbered visual-context block', () => {
-    const msgs = buildAnswerMessages({
-      mode: 'continuous',
-      question: '这道题怎么做？',
-      recentTranscript: ['这道题怎么做？'],
-      visualContext: ['题目：反转链表', '白板画的是一棵二叉树'],
-    });
-    const user = msgs[msgs.length - 1].content as string;
-    expect(user).toContain('【视觉上下文】');
-    expect(user).toContain('[图1] 题目：反转链表');
-    expect(user).toContain('[图2] 白板画的是一棵二叉树');
-    // visual context sits after the transcript, before the final ask
-    expect(user.indexOf('【最近的对话转录】')).toBeLessThan(user.indexOf('【视觉上下文】'));
-    expect(user.indexOf('【视觉上下文】')).toBeLessThan(user.indexOf('请直接给出'));
-  });
-
-  it('omits the block entirely when the queue is empty', () => {
-    const empty = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [], visualContext: [] });
-    const blank = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [] });
-    expect((empty[empty.length - 1].content as string)).not.toContain('【视觉上下文】');
-    expect(empty).toEqual(blank);
+  it('numbers each cached extraction and puts the block before the conversation', () => {
+    const user = lastUser(
+      buildAnswerMessages({
+        mode: 'continuous',
+        question: 'How would you solve it?',
+        transcript: [line(1, 'them', 'How would you solve it?')],
+        visualContext: ['Reverse a linked list.', 'The whiteboard shows a binary tree.'],
+      }),
+    );
+    expect(user).toContain(
+      '<visual_context>\n<screenshot index="1">\nReverse a linked list.\n</screenshot>\n' +
+        '<screenshot index="2">\nThe whiteboard shows a binary tree.\n</screenshot>\n</visual_context>',
+    );
+    expect(user.indexOf('<visual_context>')).toBeLessThan(user.indexOf('<conversation>'));
   });
 
   it('drops blank entries and never leaks into free/translate modes', () => {
-    const msgs = buildAnswerMessages({
-      mode: 'segment',
-      question: 'x',
-      recentTranscript: [],
-      visualContext: ['  ', 'real content'],
-    });
-    const user = msgs[msgs.length - 1].content as string;
-    expect(user).toContain('[图1] real content');
-    expect(user).not.toContain('[图2]');
+    const user = lastUser(
+      buildAnswerMessages({ mode: 'segment', question: 'x', transcript: [], visualContext: ['  ', 'real content'] }),
+    );
+    expect(user).toContain('<screenshot index="1">\nreal content\n</screenshot>');
+    expect(user).not.toContain('index="2"');
 
-    const free = buildAnswerMessages({
-      mode: 'free',
-      freeQuestion: 'hi',
-      recentTranscript: [],
-      visualContext: ['leaked?'],
-    });
+    const free = buildAnswerMessages({ mode: 'free', freeQuestion: 'hi', transcript: [], visualContext: ['leaked?'] });
     expect(JSON.stringify(free)).not.toContain('leaked?');
-
-    const translate = buildAnswerMessages({
-      mode: 'translate',
-      question: 'hi',
-      recentTranscript: [],
-      visualContext: ['leaked?'],
-    });
+    const translate = buildAnswerMessages({ mode: 'translate', question: 'hi', transcript: [], visualContext: ['leaked?'] });
     expect(JSON.stringify(translate)).not.toContain('leaked?');
   });
 });
@@ -227,27 +229,22 @@ describe('isLikelyQuestion (continuous-mode gate)', () => {
 });
 
 describe('buildAnswerMessages history (session coherence)', () => {
-  it('injects prior Q&A between system and the new user turn', () => {
+  it('wraps earlier questions in <question> and keeps earlier answers as they are', () => {
     const history: ChatMessage[] = [
-      { role: 'user', content: '上一个问题' },
-      { role: 'assistant', content: '上一个回答' },
+      { role: 'user', content: 'previous question' },
+      { role: 'assistant', content: 'previous answer' },
     ];
-    const msgs = buildAnswerMessages({
-      mode: 'segment',
-      question: '新问题',
-      recentTranscript: [],
-      history,
-    });
+    const msgs = buildAnswerMessages({ mode: 'segment', question: 'new question', transcript: [], history });
     expect(msgs[0].role).toBe('system');
-    expect(msgs[1]).toEqual(history[0]);
+    expect(msgs[1]).toEqual({ role: 'user', content: '<question>\nprevious question\n</question>' });
     expect(msgs[2]).toEqual(history[1]);
-    expect(msgs[msgs.length - 1].content).toContain('新问题');
+    expect(lastUser(msgs)).toContain('new question');
   });
   it('translate mode ignores history entirely', () => {
     const msgs = buildAnswerMessages({
       mode: 'translate',
       question: 'Hello',
-      recentTranscript: [],
+      transcript: [],
       history: [{ role: 'user', content: 'leak?' }],
     });
     expect(JSON.stringify(msgs)).not.toContain('leak?');
@@ -255,83 +252,65 @@ describe('buildAnswerMessages history (session coherence)', () => {
 });
 
 describe('dual-slot material injection (resume / JD)', () => {
-  it('injects resume + JD as delimited sections of the system prompt', () => {
-    const msgs = buildAnswerMessages({
+  it('injects resume + JD as <resume> and <job_description> blocks of the system prompt', () => {
+    const sys = buildAnswerMessages({
       mode: 'segment',
       question: 'x',
-      recentTranscript: [],
-      resume: '我做过一个实时音频转录项目，用 whisper + DirectML。',
-      jd: '岗位职责：负责语音产品研发。',
-    });
-    const sys = msgs[0].content as string;
-    expect(sys).toContain('【简历】');
-    expect(sys).toContain('DirectML');
-    expect(sys).toContain('【岗位JD】');
-    expect(sys).toContain('语音产品研发');
+      transcript: [],
+      resume: 'Built a live transcription app with whisper + DirectML.',
+      jd: 'Responsibilities: build voice products.',
+    })[0].content as string;
+    expect(sys).toContain('<resume>\nBuilt a live transcription app with whisper + DirectML.\n</resume>');
+    expect(sys).toContain('<job_description>\nResponsibilities: build voice products.\n</job_description>');
   });
   it('legacy background is treated as resume material (compat)', () => {
-    const msgs = buildAnswerMessages({
-      mode: 'segment',
-      question: 'x',
-      recentTranscript: [],
-      background: '我的全局知识库内容',
-    });
-    const sys = msgs[0].content as string;
-    expect(sys).toContain('【简历】');
-    expect(sys).toContain('我的全局知识库内容');
+    const sys = buildAnswerMessages({ mode: 'segment', question: 'x', transcript: [], background: 'global KB text' })[0]
+      .content as string;
+    expect(sys).toContain('<resume>\nglobal KB text\n</resume>');
   });
-  it('omits sections when empty', () => {
-    const msgs = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [], background: '  ' });
-    const sys = msgs[0].content as string;
-    // the persona text may mention 【简历】 in its rules — check section headers
-    expect(sys).not.toContain('【简历】（');
-    expect(sys).not.toContain('【岗位JD】（');
-    expect(sys).not.toContain('【简历结束】');
+  it('omits the blocks when empty', () => {
+    const sys = buildAnswerMessages({ mode: 'segment', question: 'x', transcript: [], background: '  ' })[0]
+      .content as string;
+    // the rules mention <resume> by name; only the blocks close the tag
+    expect(sys).not.toContain('</resume>');
+    expect(sys).not.toContain('</job_description>');
   });
   it('caps oversized material to the char budget', () => {
-    const huge = 'A'.repeat(20000);
-    const msgs = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [], resume: huge });
-    const sys = msgs[0].content as string;
-    // system prompt = persona + <=8000 material chars + delimiters
-    expect(sys.length).toBeLessThan(9000);
+    const sys = buildAnswerMessages({ mode: 'segment', question: 'x', transcript: [], resume: 'A'.repeat(20000) })[0]
+      .content as string;
+    expect(sys.length).toBeLessThan(PROMPT_TECH.length + MAX_BACKGROUND_CHARS + 100);
   });
   it('translate mode never carries material', () => {
-    const msgs = buildAnswerMessages({
-      mode: 'translate',
-      question: 'Hello',
-      recentTranscript: [],
-      resume: '机密简历内容',
-      jd: '机密JD内容',
-    });
-    const joined = JSON.stringify(msgs);
-    expect(joined).not.toContain('机密简历内容');
-    expect(joined).not.toContain('机密JD内容');
+    const joined = JSON.stringify(
+      buildAnswerMessages({ mode: 'translate', question: 'Hello', transcript: [], resume: 'secret resume', jd: 'secret JD' }),
+    );
+    expect(joined).not.toContain('secret resume');
+    expect(joined).not.toContain('secret JD');
   });
 });
 
 describe('buildStablePrefix (prefix-cache friendliness)', () => {
   it('is byte-stable: identical inputs yield the identical string', () => {
-    const a = buildStablePrefix('简历内容', 'JD内容', 'chinese');
-    const b = buildStablePrefix('简历内容', 'JD内容', 'chinese');
-    expect(a).toBe(b);
+    const a = buildStablePrefix('tech', 'resume text', 'JD text');
+    expect(buildStablePrefix('tech', 'resume text', 'JD text')).toBe(a);
     expect(a).not.toMatch(/\d{4}-\d{2}-\d{2}|\d{13}/); // no dates / timestamps
   });
   it('is the entire system message of segment/continuous requests', () => {
-    const prefix = buildStablePrefix('R', 'J', 'english');
     const msgs = buildAnswerMessages({
       mode: 'segment',
       question: 'q',
-      recentTranscript: ['a'],
+      transcript: [line(1, 'them', 'a')],
       resume: 'R',
       jd: 'J',
-      answerLang: 'english',
+      interviewType: 'hr',
     });
-    expect(msgs[0].content).toBe(prefix);
+    expect(msgs[0].content).toBe(buildStablePrefix('hr', 'R', 'J'));
+  });
+  it('differs per interview type', () => {
+    expect(buildStablePrefix('hr', 'R', 'J')).not.toBe(buildStablePrefix('tech', 'R', 'J'));
   });
   it('gives the full budget to a lone slot', () => {
-    const huge = 'B'.repeat(20000);
-    const p = buildStablePrefix('', huge, 'chinese');
-    expect(p).toContain('B'.repeat(MAX_BACKGROUND_CHARS));
+    expect(buildStablePrefix('tech', '', 'B'.repeat(20000))).toContain('B'.repeat(MAX_BACKGROUND_CHARS));
   });
 });
 
@@ -352,50 +331,26 @@ describe('smartClip (priority-aware budget truncation)', () => {
   });
 });
 
-describe('classifyQuestion + questionHint', () => {
-  it('classifies behavioral questions', () => {
-    expect(classifyQuestion('先做个自我介绍吧')).toBe('behavioral');
-    expect(classifyQuestion('你为什么从上一家公司离职？')).toBe('behavioral');
-    expect(classifyQuestion('说说你印象最深的一个项目挑战')).toBe('behavioral');
-    expect(classifyQuestion('Tell me about yourself')).toBe('behavioral');
-  });
-  it('classifies technical questions', () => {
-    expect(classifyQuestion('讲讲 Redis 的持久化原理')).toBe('technical');
-    expect(classifyQuestion('这个查询怎么优化性能？')).toBe('technical');
-    expect(classifyQuestion('手写一个二叉树的层序遍历')).toBe('technical');
-    expect(classifyQuestion('What is the difference between TCP and UDP?')).toBe('technical');
-  });
-  it('classifies smalltalk', () => {
-    expect(classifyQuestion('你好，能听到我说话吗？')).toBe('smalltalk');
-    expect(classifyQuestion('Hi, can you hear me?')).toBe('smalltalk');
-  });
-  it('falls back to other (no hint) when unsure', () => {
-    expect(classifyQuestion('今天我们随便聊聊')).toBe('other');
-    expect(questionHint('other')).toBe('');
-  });
-  it('appends the hint line to the user message', () => {
-    const msgs = buildAnswerMessages({
-      mode: 'segment',
-      question: '讲讲 Redis 的持久化原理',
-      recentTranscript: [],
-    });
-    expect(msgs[msgs.length - 1].content).toContain('题型：技术题');
-  });
-});
-
 describe('buildMemoUpdateMessages / clampMemo (P1-5 pure logic)', () => {
-  it('folds the old memo and the new Q&A into a bounded structured prompt', () => {
-    const msgs = buildMemoUpdateMessages('【已问问题】自我介绍', '你的优势是什么？', '我的优势是后端高并发。');
+  it('folds the old notes and the new Q&A into four XML sections', () => {
+    const msgs = buildMemoUpdateMessages(
+      '<asked_questions>\nself intro\n</asked_questions>',
+      'What are your strengths?',
+      'Backend concurrency.',
+    );
     expect(msgs).toHaveLength(2);
-    expect(msgs[0].content).toContain('800 字');
-    expect(msgs[0].content).toContain('我已声称的事实');
-    expect(msgs[1].content).toContain('【已问问题】自我介绍');
-    expect(msgs[1].content).toContain('问：你的优势是什么？');
-    expect(msgs[1].content).toContain('答：我的优势是后端高并发。');
+    const sys = msgs[0].content as string;
+    expect(sys).toContain('at most 250 words');
+    for (const tag of ['<asked_questions>', '<claimed_facts>', '<interviewer_focus>', '<cautions>']) {
+      expect(sys).toContain(tag);
+    }
+    const user = msgs[1].content as string;
+    expect(user).toContain('<current_notes>\n<asked_questions>\nself intro\n</asked_questions>\n</current_notes>');
+    expect(user).toContain('<question>\nWhat are your strengths?\n</question>');
+    expect(user).toContain('<answer>\nBackend concurrency.\n</answer>');
   });
-  it('shows （空） for a first-time memo', () => {
-    const msgs = buildMemoUpdateMessages('', 'q', 'a');
-    expect(msgs[1].content).toContain('（空）');
+  it('marks first-time notes as empty', () => {
+    expect(buildMemoUpdateMessages('', 'q', 'a')[1].content).toContain('<current_notes>\nempty\n</current_notes>');
   });
   it('clampMemo hard-caps the stored memo', () => {
     expect(clampMemo('x'.repeat(5000))).toHaveLength(MAX_MEMO_CHARS);
@@ -405,15 +360,8 @@ describe('buildMemoUpdateMessages / clampMemo (P1-5 pure logic)', () => {
 
 describe('buildPrewarmMessages (P1-6 prefix-cache warm)', () => {
   it('system message is byte-identical to real answer requests', () => {
-    const prefix = buildStablePrefix('简历', 'JD', 'chinese');
-    const warm = buildPrewarmMessages(prefix);
-    const real = buildAnswerMessages({
-      mode: 'segment',
-      question: 'q',
-      recentTranscript: [],
-      resume: '简历',
-      jd: 'JD',
-    });
+    const warm = buildPrewarmMessages(buildStablePrefix('tech', 'resume', 'JD'));
+    const real = buildAnswerMessages({ mode: 'segment', question: 'q', transcript: [], resume: 'resume', jd: 'JD' });
     expect(warm[0].role).toBe('system');
     expect(warm[0].content).toBe(real[0].content);
     // the user turn is tiny and CONSTANT (no timestamps → deterministic)
@@ -423,22 +371,23 @@ describe('buildPrewarmMessages (P1-6 prefix-cache warm)', () => {
 
 describe('memo block (rolling interview memo, P1)', () => {
   it('sits between the stable prefix and the history', () => {
-    const history: ChatMessage[] = [{ role: 'user', content: '旧问题' }];
     const msgs = buildAnswerMessages({
       mode: 'segment',
-      question: '新问题',
-      recentTranscript: [],
-      memo: '已问：自我介绍。我已声称：三年经验。',
-      history,
+      question: 'new question',
+      transcript: [],
+      memo: 'claimed: three years of backend work',
+      history: [{ role: 'user', content: 'old question' }],
     });
     expect(msgs[0].role).toBe('system');
-    expect(msgs[1].content).toContain('【面试进行备忘】');
-    expect(msgs[1].content).toContain('三年经验');
-    expect(msgs[3]).toEqual(history[0]);
+    expect(msgs[1].content).toBe('<interview_memo>\nclaimed: three years of backend work\n</interview_memo>');
+    expect(msgs[2].role).toBe('assistant');
+    expect(msgs[3]).toEqual({ role: 'user', content: '<question>\nold question\n</question>' });
   });
   it('is omitted entirely when empty', () => {
-    const msgs = buildAnswerMessages({ mode: 'segment', question: 'q', recentTranscript: [], memo: ' ' });
-    expect(JSON.stringify(msgs)).not.toContain('面试进行备忘');
+    const msgs = buildAnswerMessages({ mode: 'segment', question: 'q', transcript: [], memo: ' ' });
+    // system + the question message only; <input_format> names the tag, so check messages, not text
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(lastUser(msgs).startsWith('<question>')).toBe(true);
   });
 });
 
@@ -459,50 +408,39 @@ describe('toProxyRules', () => {
   });
 });
 
-describe('langDirective', () => {
-  it('produces a distinct hook per language', () => {
-    expect(langDirective('chinese')).toContain('中文');
-    expect(langDirective('english')).toContain('英文');
-    expect(langDirective('chinese')).not.toBe(langDirective('english'));
-  });
-});
-
 describe('buildTranslateMessages / translate mode', () => {
-  it('targets Chinese, output-only, no context', () => {
+  it('targets Simplified Chinese, output-only, no context', () => {
     const msgs = buildTranslateMessages('Could you introduce your company?');
     expect(msgs).toHaveLength(2);
-    expect(msgs[0].content).toContain('简体中文');
-    expect(msgs[0].content).toContain('只输出译文');
+    expect(msgs[0].content).toContain('Simplified Chinese');
+    expect(msgs[0].content).toContain('Output only the translation');
     expect(msgs[1].content).toBe('Could you introduce your company?');
   });
 
-  it('translate mode routes through buildAnswerMessages ignoring answerLang', () => {
+  it('translate mode routes through buildAnswerMessages without transcript context', () => {
     const msgs = buildAnswerMessages({
       mode: 'translate',
       question: 'Hello world',
-      recentTranscript: ['irrelevant context'],
-      answerLang: 'english',
+      transcript: [line(1, 'them', 'irrelevant context')],
     });
-    // no transcript context leaks into a translation request
     expect(JSON.stringify(msgs)).not.toContain('irrelevant context');
     expect(msgs[1].content).toBe('Hello world');
-    expect(msgs[0].content).toContain('简体中文');
   });
 });
 
 describe('buildVisionMessages', () => {
   it('builds one multimodal user message: image first, question second', () => {
-    const msgs = buildVisionMessages('这页 PPT 讲什么？', 'data:image/png;base64,AAA');
+    const msgs = buildVisionMessages('What is this slide about?', 'data:image/png;base64,AAA');
     expect(msgs).toHaveLength(2);
     const content = msgs[1].content as Array<Record<string, unknown>>;
     expect(content[0]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } });
-    expect(content[1]).toEqual({ type: 'text', text: '这页 PPT 讲什么？' });
+    expect(content[1]).toEqual({ type: 'text', text: 'What is this slide about?' });
+    expect(msgs[0].content).toContain('in English');
   });
 
   it('falls back to a default question when empty', () => {
-    const msgs = buildVisionMessages('  ', 'data:image/png;base64,AAA');
-    const content = msgs[1].content as Array<{ type: string; text?: string }>;
-    expect(content[1].text).toContain('要点');
+    const content = buildVisionMessages('  ', 'data:image/png;base64,AAA')[1].content as Array<{ type: string; text?: string }>;
+    expect(content[1].text).toContain('key points');
   });
 });
 
@@ -516,23 +454,24 @@ describe('buildExtractionMessages (R6: ai-ext, S -> E)', () => {
     expect(content[1].type).toBe('text');
   });
 
-  it('instructs the model to only extract, never answer or comment', () => {
-    const msgs = buildExtractionMessages('data:image/png;base64,CCC');
-    const sys = msgs[0].content as string;
-    expect(sys).toContain('不作答');
-    expect(sys).toContain('不要编造');
+  it('instructs the model to only extract, never answer or guess', () => {
+    const sys = buildExtractionMessages('data:image/png;base64,CCC')[0].content as string;
+    expect(sys).toContain('do not answer, solve or comment');
+    expect(sys).toContain('do not guess');
   });
 });
 
 describe('clampTranscript', () => {
   it('keeps the newest lines within budget', () => {
-    const lines = ['老'.repeat(2000), '中'.repeat(1000), '新'.repeat(1000)];
-    const out = clampTranscript(lines, MAX_CONTEXT_CHARS);
-    expect(out).toHaveLength(2);
-    expect(out[out.length - 1][0]).toBe('新');
+    const lines = [
+      line(1, 'them', 'a'.repeat(MAX_CONTEXT_CHARS)),
+      line(2, 'me', 'b'.repeat(MAX_CONTEXT_CHARS / 2)),
+      line(3, 'them', 'c'.repeat(MAX_CONTEXT_CHARS / 4)),
+    ];
+    expect(clampTranscript(lines, MAX_CONTEXT_CHARS).map((l) => l.id)).toEqual([2, 3]);
   });
   it('returns all lines when under budget', () => {
-    expect(clampTranscript(['a', 'b'])).toEqual(['a', 'b']);
+    expect(clampTranscript([line(1, 'them', 'a'), line(2, 'me', 'b')])).toHaveLength(2);
   });
 });
 

@@ -12,14 +12,23 @@ export type { TrayCommand, TrayRendererCommand } from './trayMenu';
 // ---------- Settings ----------
 
 export type AsrLanguage = 'auto' | 'chinese' | 'english';
-export type AnswerLang = 'chinese' | 'english';
 /** who is speaking: the other party (system audio) vs the user (microphone) */
 export type Speaker = 'them' | 'me';
+/** one transcript segment as the prompt builder and the debug log see it */
+export interface TranscriptLine {
+  id: number;
+  speaker: Speaker;
+  text: string;
+}
+/** per session: which system prompt ai-ans uses (electron/llm/prompts.ts
+ * PROMPT_HR — behavioral / motivation / CV deep dive; PROMPT_TECH — coding /
+ * system design / concept explanation) */
+export type InterviewType = 'hr' | 'tech';
 /** answer-body font size (right pane only) */
 export type FontScale = 'small' | 'medium' | 'large';
 /** UI theme; 'system' follows prefers-color-scheme */
 export type ThemeMode = 'dark' | 'light' | 'system';
-/** UI display language (independent of answerLang, which steers the LLM) */
+/** UI display language (answers are always English) */
 export type UiLang = 'zh' | 'en';
 /** per-session material slots: resume vs job description */
 export type KbSlot = 'resume' | 'jd';
@@ -41,7 +50,9 @@ export interface HotkeySettings {
   hotkeyShotClear: string;
   /** answer now: interviewer lines since the last answer + queued screenshots */
   hotkeyAnswer: string;
-  /** start system-audio capture (same as the 开始 button) */
+  /** send the question typed in the answer pane (same as the 问 button) */
+  hotkeyFreeAsk: string;
+  /** start / stop system-audio capture (same as the 开始/停止 button) */
   hotkeyCapture: string;
   /** clear this session's answers (right pane 清空) */
   hotkeyClearAnswers: string;
@@ -57,6 +68,7 @@ export const HOTKEY_FIELDS = [
   'hotkeyShotUndo',
   'hotkeyShotClear',
   'hotkeyAnswer',
+  'hotkeyFreeAsk',
   'hotkeyCapture',
   'hotkeyClearAnswers',
   'hotkeyClearTranscript',
@@ -69,6 +81,7 @@ export type HotkeyAction =
   | 'shotUndo'
   | 'shotClear'
   | 'answer'
+  | 'freeAsk'
   | 'capture'
   | 'clearAnswers'
   | 'clearTranscript';
@@ -204,8 +217,6 @@ export interface SettingsFile {
   llm: {
     baseUrl: string;
     model: string;
-    /** reply language for AI answers (R: 模式选择); default chinese */
-    answerLang: AnswerLang;
     /** answer with the vision/multimodal provider instead of the text model */
     answerWithVision?: boolean;
     /** encrypted-at-rest (safeStorage, base64); never exposed raw to renderer */
@@ -298,7 +309,6 @@ export interface PublicSettings {
   llm: {
     baseUrl: string;
     model: string;
-    answerLang: AnswerLang;
     answerWithVision: boolean;
     apiKeySet: boolean;
     providerId?: ProviderId;
@@ -359,7 +369,6 @@ export interface SettingsPatch {
   llm?: {
     baseUrl?: string;
     model?: string;
-    answerLang?: AnswerLang;
     answerWithVision?: boolean;
     apiKey?: string;
     providerId?: ProviderId;
@@ -488,8 +497,10 @@ export interface StoredSession {
   resumeText?: string;
   jdName?: string;
   jdText?: string;
-  /** rolling interview memo (P1): ≤800-char structured summary, async-updated */
+  /** rolling interview memo (P1): structured summary, async-updated */
   memo?: string;
+  /** chosen in the title bar; absent = 'tech' */
+  interviewType?: InterviewType;
 }
 
 export interface SessionsFile {
@@ -508,14 +519,11 @@ export interface LlmAskPayload {
   question?: string;
   /** free-form question (mode === 'free') */
   freeQuestion?: string;
-  /** recent transcript lines, oldest first — already role-marked for the prompt */
-  recentTranscript: string[];
-  /** same window as recentTranscript, structured — debug prompt-log only, never
-   * read by buildAnswerMessages; lets the logger dedupe against what it already
-   * wrote for this session without re-parsing marker text */
-  transcriptForLog?: { id: number; speaker: Speaker; text: string }[];
-  /** reply language for segment/continuous/free (translate is always zh) */
-  answerLang?: AnswerLang;
+  /** recent transcript, oldest first; ids let the debug prompt-log skip lines
+   * it already wrote for this session */
+  transcript: TranscriptLine[];
+  /** selects the ai-ans system prompt (segment/continuous); default 'tech' */
+  interviewType?: InterviewType;
   /** prior Q&A turns for session coherence (oldest first) */
   history?: { role: 'user' | 'assistant'; content: string }[];
   /** legacy single-slot KB (kept for compat; treated as resume material) */

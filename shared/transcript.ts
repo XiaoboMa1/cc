@@ -109,20 +109,6 @@ export function reindexSegments(list: readonly TranscriptSegment[]): TranscriptS
   return list.map((s, i) => ({ ...s, id: i + 1 }));
 }
 
-/**
- * Role marker prefixed to a transcript line before it reaches the LLM.
- * ASR text alone carries no speaker signal, so without this the model sees
- * interviewer and interviewee speech merged into one undifferentiated blob.
- */
-export function speakerMarker(speaker: TranscriptSegment['speaker']): string {
-  return (speaker ?? 'them') === 'me' ? '### interviewee:' : '### interviewer:';
-}
-
-/** Segments -> prompt-ready lines, each tagged with who said it. */
-export function toPromptLines(segments: readonly TranscriptSegment[]): string[] {
-  return segments.map((s) => `${speakerMarker(s.speaker)} ${s.text}`);
-}
-
 /** p50/p95 helper for the latency HUD. */
 export function percentile(values: readonly number[], p: number): number | undefined {
   if (values.length === 0) return undefined;

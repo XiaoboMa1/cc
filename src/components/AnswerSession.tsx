@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import type { KbSlot, StoredSession } from '../../shared/protocol';
 import { useT } from '../i18n';
 
@@ -28,6 +28,12 @@ export interface ShotQueueItem {
   error?: string;
 }
 
+/** what App drives directly: the free-ask hotkey sends the typed question */
+export interface AnswerSessionHandle {
+  /** same as clicking 问 */
+  submit(): void;
+}
+
 /**
  * 智能体 conversation panel (R4) with a multi-session bar. Answers ACCUMULATE
  * as a scrolling session (never replaced); each meeting is its own session
@@ -35,6 +41,7 @@ export interface ShotQueueItem {
  * multimodal mode (it needs a vision model).
  */
 export function AnswerSession({
+  ref,
   sessions,
   currentId,
   turns,
@@ -60,6 +67,7 @@ export function AnswerSession({
   onShotQueueRemove,
   onShotQueueClear,
 }: {
+  ref?: Ref<AnswerSessionHandle>;
   sessions: StoredSession[];
   currentId: string;
   turns: AnswerTurn[];
@@ -108,10 +116,12 @@ export function AnswerSession({
 
   const submit = () => {
     const q = inputRef.current?.value.trim();
-    if (!q) return;
+    // !answersReady: the 问 button is disabled, so the hotkey does nothing either
+    if (!q || !answersReady) return;
     onFreeAsk(q);
     if (inputRef.current) inputRef.current.value = '';
   };
+  useImperativeHandle(ref, () => ({ submit }));
 
   return (
     <section className="pane pane-answer">

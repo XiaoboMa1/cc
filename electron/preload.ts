@@ -3,6 +3,7 @@ import {
   IPC,
   type AppInfo,
   type AsrEvent,
+  type InterviewType,
   type KbSlot,
   type LlmAskPayload,
   type LlmEvent,
@@ -61,7 +62,7 @@ export interface McApi {
   llmCancel(requestId: string): void;
   /** P1-6: warm the DeepSeek prefix cache with the session's material;
    * immediate=true warms even when not capturing (▶ start / material import) */
-  prewarm(payload: { resume?: string; jd?: string; immediate?: boolean }): void;
+  prewarm(payload: { resume?: string; jd?: string; interviewType?: InterviewType; immediate?: boolean }): void;
   /** P1-5: fold a finished Q&A into the rolling memo ('' = keep the old one) */
   memoUpdate(p: { memo: string; question: string; answer: string }): Promise<string>;
   onLlmEvent(cb: (ev: LlmEvent) => void): () => void;

@@ -64,7 +64,6 @@ export function defaultSettings(platform: string = process.platform): SettingsFi
       // Plain 'deepseek-v4-flash' streams a long reasoning_content chain first
       // — too slow for a live copilot (measured 2026-07-09).
       model: 'deepseek-chat',
-      answerLang: 'chinese',
       answerWithVision: false,
     },
     vision: {},
@@ -406,7 +405,6 @@ export class SettingsStore {
       llm: {
         baseUrl: d.llm.baseUrl,
         model: d.llm.model,
-        answerLang: d.llm.answerLang,
         answerWithVision: !!d.llm.answerWithVision,
         apiKeySet: !!d.llm.apiKeyEnc,
         providerId: d.llm.providerId,

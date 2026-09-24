@@ -1,44 +1,92 @@
 /**
  * Prompt construction for meeting/interview answering (pure logic, TDD).
- * R4: (a) manual — answer THIS sentence; (b) continuous — advise on recent
- * speech; (c) free — ask over the conversation; (d) translate — translate a
- * line to Chinese. Answer language (zh/en) is a runtime prompt hook.
+ * Every prompt is English and every answer is English, except
+ * buildTranslateMessages, whose job is a Chinese translation.
  *
- * v2 (2026-07-10): cache-friendly three-layer layout —
- *   stable prefix  = persona + 【简历】 + 【岗位JD】 + lang directive
- *                    (BYTE-STABLE across requests → DeepSeek prefix cache)
- *   slow state     = 【面试备忘】memo (updated every few turns)
- *   fast context   = history turns + recent transcript + this question + hint
+ * ai-ans (segment / continuous) — cache-friendly three-layer layout:
+ *   stable prefix = PROMPT_HR | PROMPT_TECH + <resume> + <job_description>
+ *                   (BYTE-STABLE per interview type + material → DeepSeek prefix cache)
+ *   slow state    = <interview_memo> (refreshed after each answer)
+ *   fast context  = history turns, then <visual_context> <conversation> <question>
+ * A block with nothing in it is left out entirely.
  */
 import type { ChatMessage } from './adapter';
-import { classifyQuestion, isLikelyQuestion, type QuestionKind } from '../../shared/textHeuristics';
+import type { InterviewType, TranscriptLine } from '../../shared/protocol';
 
-export { isLikelyQuestion, classifyQuestion };
+/** transcript chars per request, newest lines kept; sized so a few spoken
+ * answers of 240-400+ words still fit next to the interviewer's lines */
+export const MAX_CONTEXT_CHARS = 6000;
 
-export const MAX_CONTEXT_CHARS = 2400;
+// ---------- ai-ans system prompts ----------
 
-export type AnswerLang = 'chinese' | 'english';
+/** how every answer must sound, for both interview types (anti-AI-wording rules) */
+const STYLE = `<style>
+Every sentence has to carry something only I could say. Before each sentence, run two checks:
+1. Where does it come from? My own work in <resume>, what was said in <conversation> and what is on screen in <visual_context> count. The job description, the question itself and general knowledge of the field do not: use them only as the premise of a conclusion drawn from my own work, in the same sentence as that conclusion.
+2. Who else could say it? If another candidate could say it unchanged about another company and another system, replace it with the specific instance: which system, how many users or requests, what broke, what I changed, what the number was afterwards.
 
-/** The prompt hook that steers DeepSeek's reply language (R: 模式选择). */
-export function langDirective(lang: AnswerLang): string {
-  return lang === 'english'
-    ? '- 用【英文】输出我要念的话；必要时在最后附一句极简中文备注。'
-    : '- 用【中文】输出。';
-}
+Never write:
+- A tautology, where the predicate restates the subject ("a fix only one person can follow is a fix that works once"). Say what was observed instead.
+- A sentence true of every system, team or employer ("keeps the platform correct as it changes", "lets the team focus on what matters"). Say what is specific to this one: how many callers, what breaks first, what the last incident was.
+- An ordinary activity dressed up as a skill ("reading systems I didn't write"). Say the plain version and move on, or give the instance that is not ordinary.
+- The job description or the question handed back in new words.
+- A contrast with something nobody proposed: "A, not B", "not A but B", "rather than", "X isn't Y, it's Z". Use one only when B was a real option I tried or rejected, and then say what happened to B.
+- A second sentence that re-says the first.
+- A closing line that generalizes past the story ("in the end, the system is always telling you what it does").
+- Systems described as people ("the code lied", "the tests were rotting"). Say the mechanism: "the error path never set the status, so the response went out as a success". Field terms such as listener or supervisor are fine.
+- Category words in place of the instance: layer, surface, silent, ecosystem, landscape, space, journey, "the shape of X". Say which wrong output, which component, which constraint.
+- Setup-then-payoff ("there were two challenges, and only the second one was real"). Describe both, and give the second more words.
+- An em-dash insert that only restates ("one quality — persistence — carried the project").
+- A balanced pair of clauses at the end ("Without them I could only assert it. With them I could show it.").
+Apply these while writing and never mention them.
+</style>`;
 
-/** teleprompter persona: the output IS what the user reads aloud, verbatim */
-const PERSONA = [
-  '你是我的实时面试提词器。我正在参加面试，屏幕上是面试官说话的实时转录。',
-  '你输出的内容就是我接下来要照着念的话，必须遵守：',
-  '- 全程用第一人称「我」，口语自然，让我可以一字不改地念出来；',
-  '- 第一句先给结论或直接回应，再展开 2-3 个短要点；',
-  '- 全文控制在 约 150-350 字；',
-  '- 不用 Markdown 标题、编号、加粗等书面格式，分点直接换行；',
-  '- 行为/经历类问题按 STAR 展开：情境→任务→行动→结果；',
-  '- 技术类问题先一句话讲思路，再给关键点，必要时给复杂度或对比结论；',
-  '- 只能使用【简历】里的真实经历，绝不编造简历之外的公司、项目、数字；',
-  '- 没把握的问题，给出稳妥的通用说法，或一句得体的争取思考时间的话术。',
-];
+/** what each tag in the request holds, for both interview types */
+const INPUT_FORMAT = `<input_format>
+- <conversation>: the live transcript, oldest first. <interviewer> is the interviewer's audio; <interviewee> is my microphone, so it is what I actually said.
+- <visual_context>: text extracted from screenshots I took, in capture order.
+- <question>: what the interviewer has said since your previous answer. This is what you answer.
+- <interview_memo> and your earlier replies in this chat: what has been said so far. Stay consistent with both.
+</input_format>`;
+
+/** interview type 'hr': behavioral, motivation, CV deep dive */
+export const PROMPT_HR = [
+  `<role>
+You are my teleprompter in a live behavioral interview: motivation, past experience and deep dives into my CV. You see the transcript as it happens. What you write is exactly what I say next, read aloud word for word.
+</role>`,
+  `<answer_rules>
+- Speak as me: first person, spoken English, short sentences, contractions. I must be able to read it out without changing a word.
+- Plain text only: no headings, bullets, numbering or bold. Start a new line for each new point so I can keep my place.
+- Length follows the question. A full behavioral, motivation or CV deep-dive answer: 240-350 words. A narrow follow-up (a date, a number, "what was your role?"): two to four sentences. Small talk or an audio check: one sentence.
+- The first sentence answers the question directly. Then the story.
+- Experience questions: the situation, my task, the actions I took, the result with its number. Most of the words go to the actions.
+- Motivation questions ("why this role", "why us", "why are you leaving"): tie a specific item in <job_description> to a specific piece of my work in <resume>.
+- Use only facts from <resume> and from what I have already said in <conversation>. Never invent a company, project, number or date.
+- End a full answer with the outcome, then one sentence naming a task from <job_description> and what I would do in it. A short follow-up just stops.
+- If the question is unclear or I have no matching experience, give the closest real example, or one natural line that buys a moment to think.
+</answer_rules>`,
+  STYLE,
+  INPUT_FORMAT,
+].join('\n\n');
+
+/** interview type 'tech': online coding, system design, concept explanation */
+export const PROMPT_TECH = [
+  `<role>
+You are my teleprompter in a live technical interview: online coding, system design, and explaining concepts, frameworks or languages. You see the transcript and the text of any problem on my screen. What you write is exactly what I say next, read aloud word for word while I code or draw.
+</role>`,
+  `<answer_rules>
+- Speak as me: first person, spoken English, short sentences, contractions. I must be able to read it out without changing a word.
+- Plain text only: no headings, bullets, numbering, bold or code blocks. Say identifiers and operations in words I can speak. Start a new line for each step so I can keep my place.
+- Length follows the question. Walking through a solution, a design or how something works: as long as the steps need, often 400 words or more. A narrow follow-up ("what's the time complexity?", "why a hash map?"): two to four sentences.
+- Coding: the approach in one sentence; the steps in the order I will write them; the time and space complexity with the reason; the edge cases I will test. Take every number, constraint and example from <visual_context> exactly as written.
+- System design: the requirements and the scale I assume, said as assumptions; the components and how one request flows through them; the data model; the first bottleneck and how I remove it; the trade-offs I choose.
+- Concepts, frameworks, languages: what it does, the mechanism underneath, when I would use it, and where I have used it if <resume> shows that.
+- When I mention my own projects, use only facts from <resume>. Never invent a company, project or number.
+- If the question is ambiguous, state the assumption I am making in one sentence, then answer.
+</answer_rules>`,
+  STYLE,
+  INPUT_FORMAT,
+].join('\n\n');
 
 /** total injected background budget; keeps prompts bounded regardless of size */
 export const MAX_BACKGROUND_CHARS = 8000;
@@ -81,53 +129,30 @@ export function smartClip(text: string, budget: number, priority: RegExp): strin
 }
 
 /**
- * The BYTE-STABLE system prompt: persona + resume + JD + language directive.
+ * The BYTE-STABLE system prompt: the interview type's prompt + resume + JD.
  * Same inputs MUST yield the identical string (no timestamps / randomness) —
  * the LLM prewarm request and every real request share this prefix so the
  * provider's prefix cache (DeepSeek 0.1x pricing + faster prefill) hits.
  */
-export function buildStablePrefix(resume: string, jd: string, lang: AnswerLang): string {
-  const parts = [...PERSONA];
+export function buildStablePrefix(type: InterviewType, resume: string, jd: string): string {
+  const parts = [type === 'hr' ? PROMPT_HR : PROMPT_TECH];
   const r = resume.trim();
   const j = jd.trim();
   if (r) {
-    parts.push(
-      '',
-      '【简历】（我的真实资料，回答只能基于此）',
-      smartClip(r, j ? RESUME_BUDGET : MAX_BACKGROUND_CHARS, RESUME_PRIORITY),
-      '【简历结束】',
-    );
+    parts.push(`<resume>\n${smartClip(r, j ? RESUME_BUDGET : MAX_BACKGROUND_CHARS, RESUME_PRIORITY)}\n</resume>`);
   }
   if (j) {
     parts.push(
-      '',
-      '【岗位JD】（本场面试针对的职位，回答向它贴合）',
-      smartClip(j, r ? JD_BUDGET : MAX_BACKGROUND_CHARS, JD_PRIORITY),
-      '【岗位JD结束】',
+      `<job_description>\n${smartClip(j, r ? JD_BUDGET : MAX_BACKGROUND_CHARS, JD_PRIORITY)}\n</job_description>`,
     );
   }
-  parts.push('', langDirective(lang));
-  return parts.join('\n');
-}
-
-/** one advisory line appended to the user message; '' when unknown */
-export function questionHint(kind: QuestionKind): string {
-  switch (kind) {
-    case 'behavioral':
-      return '（题型：行为/经历题——用 STAR 结构，讲简历里的真实经历）';
-    case 'technical':
-      return '（题型：技术题——先一句话思路，再关键点，必要时给复杂度）';
-    case 'smalltalk':
-      return '（题型：寒暄/暖场——一两句自然简短的回应即可，不用展开）';
-    default:
-      return '';
-  }
+  return parts.join('\n\n');
 }
 
 // ---------- P1-5: rolling interview memo (consistency > compression) ----------
 
-/** hard bound on the stored memo (prompt asks for ≤800, clamp defends) */
-export const MAX_MEMO_CHARS = 1000;
+/** hard bound on the stored memo (the prompt asks for ≤250 words, the clamp defends) */
+export const MAX_MEMO_CHARS = 2000;
 
 export function clampMemo(text: string): string {
   const t = text.trim();
@@ -143,19 +168,24 @@ export function buildMemoUpdateMessages(oldMemo: string, question: string, answe
   return [
     {
       role: 'system',
-      content: [
-        '你是面试会话的备忘维护器。把新一轮问答合并进备忘，输出更新后的完整备忘。',
-        '备忘不超过 800 字，固定四节（无内容的节保留标题写「无」）：',
-        '【已问问题】每题一行，最新在最后',
-        '【我已声称的事实】数字、经历、立场——后续回答绝不能与之矛盾',
-        '【面试官关注点】从提问推断',
-        '【注意事项】答得不稳的点、需要圆回来的坑',
-        '合并去重；超长时优先丢最旧的已问问题。只输出备忘本身，不要任何解释。',
-      ].join('\n'),
+      content: `You keep the running notes of a job interview. Merge the new exchange into the notes and output the complete updated notes: at most 250 words, in exactly these four sections, writing "none" in an empty one.
+<asked_questions>
+(one line per question, newest last)
+</asked_questions>
+<claimed_facts>
+(numbers, experience and positions I have stated; later answers must not contradict them)
+</claimed_facts>
+<interviewer_focus>
+(what the interviewer cares about, inferred from the questions)
+</interviewer_focus>
+<cautions>
+(points I answered shakily or need to come back to)
+</cautions>
+Merge duplicates. When over length, drop the oldest asked questions first. Output the notes only, with no explanation.`,
     },
     {
       role: 'user',
-      content: `【当前备忘】\n${oldMemo.trim() || '（空）'}\n\n【新一轮问答】\n问：${question.trim()}\n答：${answer.trim()}`,
+      content: `<current_notes>\n${oldMemo.trim() || 'empty'}\n</current_notes>\n\n<new_exchange>\n<question>\n${question.trim()}\n</question>\n<answer>\n${answer.trim()}\n</answer>\n</new_exchange>`,
     },
   ];
 }
@@ -177,13 +207,13 @@ export function buildPrewarmMessages(stablePrefix: string): ChatMessage[] {
 export interface AnswerPromptInput {
   /** the sentence to answer (segment/continuous) or the text to translate */
   question?: string;
-  /** recent transcript lines, oldest first */
-  recentTranscript: string[];
+  /** recent transcript, oldest first */
+  transcript: TranscriptLine[];
   mode: 'segment' | 'continuous' | 'free' | 'translate';
   /** free-form user question (mode === 'free') */
   freeQuestion?: string;
-  /** reply language for segment/continuous/free (default chinese) */
-  answerLang?: AnswerLang;
+  /** selects PROMPT_HR / PROMPT_TECH (segment/continuous); default 'tech' */
+  interviewType?: InterviewType;
   /** prior Q&A turns for a coherent session (oldest first) */
   history?: ChatMessage[];
   /** resume slot (双槽资料); falls back to `background` */
@@ -195,21 +225,42 @@ export interface AnswerPromptInput {
   /** rolling interview memo (P1) — slow-changing block, its own message */
   memo?: string;
   /** R6: cached extracted text (E) from every screenshot currently queued,
-   * oldest first — segment/continuous only, folded in as "visual context" */
+   * oldest first — segment/continuous only, folded in as <visual_context> */
   visualContext?: string[];
 }
 
 /** Keep the most recent lines within the char budget (oldest dropped first). */
-export function clampTranscript(lines: string[], maxChars = MAX_CONTEXT_CHARS): string[] {
-  const out: string[] = [];
+export function clampTranscript(
+  lines: readonly TranscriptLine[],
+  maxChars = MAX_CONTEXT_CHARS,
+): TranscriptLine[] {
+  const out: TranscriptLine[] = [];
   let total = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const len = lines[i].length + 1;
+    const len = lines[i].text.length + 1;
     if (total + len > maxChars) break;
     out.unshift(lines[i]);
     total += len;
   }
   return out;
+}
+
+/** <conversation> with consecutive lines of one speaker in one element; '' when empty */
+function conversationXml(lines: readonly TranscriptLine[]): string {
+  const groups: { speaker: TranscriptLine['speaker']; texts: string[] }[] = [];
+  for (const line of lines) {
+    const text = line.text.trim();
+    if (!text) continue;
+    const last = groups[groups.length - 1];
+    if (last?.speaker === line.speaker) last.texts.push(text);
+    else groups.push({ speaker: line.speaker, texts: [text] });
+  }
+  if (!groups.length) return '';
+  const body = groups.map((g) => {
+    const tag = g.speaker === 'me' ? 'interviewee' : 'interviewer';
+    return `<${tag}>\n${g.texts.join('\n')}\n</${tag}>`;
+  });
+  return `<conversation>\n${body.join('\n')}\n</conversation>`;
 }
 
 /**
@@ -222,7 +273,7 @@ export function buildTranslateMessages(text: string): ChatMessage[] {
     {
       role: 'system',
       content:
-        '你是翻译引擎。把用户给的整段文本翻译成【简体中文】。只输出译文本身，不要加引号、不要解释、不要复述原文；若原文已是中文则原样返回。',
+        "You are a translation engine. Translate the user's text into Simplified Chinese. Output only the translation: no quotes, no explanation, no restating of the original. If the text is already Chinese, return it unchanged.",
     },
     { role: 'user', content: text.trim() },
   ];
@@ -236,10 +287,8 @@ export function buildVisionMessages(
 ): ChatMessage[] {
   const bg = (background ?? '').trim();
   const sys =
-    '你是会议助手。用户发来一张屏幕截图（通常是对方共享的 PPT/文档或一道题目）。用中文简明回答用户关于截图的问题；若是提问/题目，给出用户可以直接说的回答要点或解题思路。' +
-    (bg
-      ? `\n\n===== 本人资料与知识库（作答时优先采用） =====\n${bg.slice(0, MAX_BACKGROUND_CHARS)}\n===== 资料结束 =====`
-      : '');
+    "You are a meeting assistant. The user sends a screenshot, usually a slide, a document or a coding problem the other side shared. Answer the user's question about it briefly, in English. If the screenshot holds a question or a problem, give the points I can say, or the approach to solve it." +
+    (bg ? `\n\n<background>\n${bg.slice(0, MAX_BACKGROUND_CHARS)}\n</background>` : '');
   return [
     {
       role: 'system',
@@ -249,7 +298,10 @@ export function buildVisionMessages(
       role: 'user',
       content: [
         { type: 'image_url', image_url: { url: imageDataUrl } },
-        { type: 'text', text: question.trim() || '解读这页内容的要点，并给出我应该怎么回应的建议。' },
+        {
+          type: 'text',
+          text: question.trim() || 'Summarize the key points on this screen and suggest how I should respond.',
+        },
       ],
     },
   ];
@@ -262,11 +314,11 @@ export function buildVisionMessages(
  */
 export function buildExtractionMessages(imageDataUrl: string): ChatMessage[] {
   const sys = [
-    '你是截图信息提取器，只做提取，不作答、不解题、不评论。',
-    '- 有文字（题目/代码/文档/聊天记录）：逐字摘录看得清的关键文字；',
-    '- 是图表/界面/示意图：一两句话说明画的是什么；',
-    '- 内容含糊或看不清：如实说明看不清，不要编造；',
-    '- 直接输出提取结果本身，不要开场白、不要「这张截图显示」这类套话。',
+    'You extract information from a screenshot. Extract only: do not answer, solve or comment.',
+    '- Text (a problem statement, code, a document, a chat): copy the legible key text word for word, keeping every number, constraint and example exact.',
+    '- A chart, UI or diagram: one or two sentences on what it shows.',
+    '- Anything blurry or cut off: say it is unreadable; do not guess.',
+    'Output the extracted content only, with no preamble such as "This screenshot shows".',
   ].join('\n');
   return [
     { role: 'system', content: sys },
@@ -274,7 +326,7 @@ export function buildExtractionMessages(imageDataUrl: string): ChatMessage[] {
       role: 'user',
       content: [
         { type: 'image_url', image_url: { url: imageDataUrl } },
-        { type: 'text', text: '提取这张截图的关键信息。' },
+        { type: 'text', text: 'Extract the key information from this screenshot.' },
       ],
     },
   ];
@@ -285,22 +337,21 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
     return buildTranslateMessages(input.question ?? '');
   }
 
-  const lang: AnswerLang = input.answerLang ?? 'chinese';
-  const context = clampTranscript(input.recentTranscript);
+  const conversation = conversationXml(clampTranscript(input.transcript));
   const resume = (input.resume ?? '').trim() || (input.background ?? '').trim();
   const jd = (input.jd ?? '').trim();
 
-  // Free "随便问": raw pass-through — NO meeting-assistant persona, so identity
+  // Free "随便问": raw pass-through — NO teleprompter prompt, so identity
   // / "which model are you" questions get the model's truthful answer. The
-  // transcript + KB are offered only as optional reference.
+  // transcript + material are offered only as optional reference.
   if (input.mode === 'free') {
     const refs: string[] = [];
-    if (resume) refs.push(`【本人资料（简历）】\n${resume.slice(0, MAX_BACKGROUND_CHARS)}`);
-    if (jd) refs.push(`【岗位JD】\n${jd.slice(0, MAX_BACKGROUND_CHARS)}`);
-    if (context.length) refs.push(`【最近的对话转录】\n${context.join('\n')}`);
+    if (resume) refs.push(`<resume>\n${resume.slice(0, MAX_BACKGROUND_CHARS)}\n</resume>`);
+    if (jd) refs.push(`<job_description>\n${jd.slice(0, MAX_BACKGROUND_CHARS)}\n</job_description>`);
+    if (conversation) refs.push(conversation);
     const msgs: ChatMessage[] = [];
     if (refs.length) {
-      msgs.push({ role: 'system', content: `以下资料供参考（可用可不用）：\n\n${refs.join('\n\n')}` });
+      msgs.push({ role: 'system', content: `Reference material. Use it only if my question needs it.\n\n${refs.join('\n\n')}` });
     }
     msgs.push(...(input.history ?? []));
     msgs.push({ role: 'user', content: (input.freeQuestion ?? '').trim() });
@@ -308,33 +359,42 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   }
 
   // segment / continuous: teleprompter with the stable prefix
-  const msgs: ChatMessage[] = [{ role: 'system', content: buildStablePrefix(resume, jd, lang) }];
+  const msgs: ChatMessage[] = [
+    { role: 'system', content: buildStablePrefix(input.interviewType ?? 'tech', resume, jd) },
+  ];
 
   const memo = (input.memo ?? '').trim();
   if (memo) {
     // slow-changing block sits BETWEEN the stable prefix and the fast history,
     // so a memo refresh only invalidates the cache from this point on
-    msgs.push({ role: 'user', content: `【面试进行备忘】（此前面试内容的滚动摘要，保持前后一致）\n${memo}` });
-    msgs.push({ role: 'assistant', content: '收到，我会保持一致。' });
+    msgs.push({ role: 'user', content: `<interview_memo>\n${memo}\n</interview_memo>` });
+    msgs.push({ role: 'assistant', content: "Noted. I'll stay consistent with it." });
   }
 
-  msgs.push(...(input.history ?? []));
+  // earlier turns: the user side is the question that answer was given for
+  for (const m of input.history ?? []) {
+    msgs.push(
+      m.role === 'user' && typeof m.content === 'string'
+        ? { role: 'user', content: `<question>\n${m.content.trim()}\n</question>` }
+        : m,
+    );
+  }
 
-  const contextBlock = context.length
-    ? `【最近的对话转录】\n${context.join('\n')}`
-    : '【最近的对话转录】（暂无）';
-
+  const blocks: string[] = [];
   const visual = (input.visualContext ?? []).map((e) => e.trim()).filter(Boolean);
-  const visualBlock = visual.length
-    ? `\n\n【视觉上下文】（截图提取的信息，供参考）\n${visual.map((e, i) => `[图${i + 1}] ${e}`).join('\n\n')}`
-    : '';
-
+  if (visual.length) {
+    const shots = visual.map((e, i) => `<screenshot index="${i + 1}">\n${e}\n</screenshot>`);
+    blocks.push(`<visual_context>\n${shots.join('\n')}\n</visual_context>`);
+  }
+  if (conversation) blocks.push(conversation);
   const q = (input.question ?? '').trim();
-  const hint = q ? questionHint(classifyQuestion(q)) : '';
-  const ask = q
-    ? `面试官刚才说：\n“${q}”\n${hint ? hint + '\n' : ''}请直接给出我可以照着念的回答。`
-    : '基于上面最近的转录，面试官最新的话需要我回应。请直接给出我可以照着念的回答。';
-
-  msgs.push({ role: 'user', content: `${contextBlock}${visualBlock}\n\n${ask}` });
+  if (q) {
+    blocks.push(`<question>\n${q}\n</question>`, 'Answer the <question> now, in the words I will say.');
+  } else {
+    blocks.push(
+      'No question has been asked aloud yet: answer from <visual_context> and <conversation> now, in the words I will say.',
+    );
+  }
+  msgs.push({ role: 'user', content: blocks.join('\n\n') });
   return msgs;
 }

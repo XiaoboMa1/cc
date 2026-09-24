@@ -11,14 +11,7 @@
  * haven't — the prompt actually SENT to the model (built from the full
  * window) is untouched; only what lands on disk is trimmed.
  */
-import type { Speaker } from '../shared/protocol';
-import { speakerMarker } from '../shared/transcript';
-
-export interface TranscriptLogLine {
-  id: number;
-  speaker: Speaker;
-  text: string;
-}
+import type { TranscriptLine } from '../shared/protocol';
 
 const loggedIdsBySession = new Map<string, Set<number>>();
 
@@ -26,14 +19,14 @@ const loggedIdsBySession = new Map<string, Set<number>>();
  * already-logged. Mutates the per-session bookkeeping. */
 export function diffTranscriptForLog(
   sessionId: string,
-  window: readonly TranscriptLogLine[],
-): { newLines: TranscriptLogLine[]; carriedOverCount: number } {
+  window: readonly TranscriptLine[],
+): { newLines: TranscriptLine[]; carriedOverCount: number } {
   let seen = loggedIdsBySession.get(sessionId);
   if (!seen) {
     seen = new Set();
     loggedIdsBySession.set(sessionId, seen);
   }
-  const newLines: TranscriptLogLine[] = [];
+  const newLines: TranscriptLine[] = [];
   let carriedOverCount = 0;
   for (const line of window) {
     if (seen.has(line.id)) {
@@ -65,13 +58,6 @@ export function syncPromptLogSession(sessionId: string, currentIds: readonly num
 
 export function clearPromptLogState(): void {
   loggedIdsBySession.clear();
-}
-
-/** Format lines the same way shared/transcript's toPromptLines formats real
- * transcript lines, so feeding them back through buildAnswerMessages for the
- * log produces the same shape as the real prompt. */
-export function formatTranscriptLogLines(lines: readonly TranscriptLogLine[]): string[] {
-  return lines.map((l) => `${speakerMarker(l.speaker)} ${l.text}`);
 }
 
 function formatMessage(m: { role: string; content: unknown }): string {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  AnswerLang,
   AsrEvent,
+  InterviewType,
   KbSlot,
   LlmAskPayload,
   PublicSettings,
@@ -12,7 +12,6 @@ import {
   nextSegmentId,
   percentile,
   reindexSegments,
-  toPromptLines,
   type TranscriptSegment,
 } from '../shared/transcript';
 import { isLikelyQuestion } from '../shared/textHeuristics';
@@ -26,7 +25,12 @@ import { ServiceHealthPanel } from './components/ServiceHealthPanel';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { HelpPanel } from './components/HelpPanel';
 import { StatusBar } from './components/StatusBar';
-import { AnswerSession, type AnswerTurn, type ShotQueueItem } from './components/AnswerSession';
+import {
+  AnswerSession,
+  type AnswerSessionHandle,
+  type AnswerTurn,
+  type ShotQueueItem,
+} from './components/AnswerSession';
 import { I18nProvider, getDict, type Dict } from './i18n';
 
 export interface AsrUiState {
@@ -57,8 +61,8 @@ const EXTRACT_WAIT_MS = 30000;
 let seq = 0;
 const uid = (p: string) => `${p}-${++seq}-${Date.now()}`;
 
-function newSession(name: string): StoredSession {
-  return { id: uid('s'), name, createdAt: Date.now(), turns: [], segments: [] };
+function newSession(name: string, interviewType: InterviewType = 'tech'): StoredSession {
+  return { id: uid('s'), name, createdAt: Date.now(), turns: [], segments: [], interviewType };
 }
 
 /** legacy single-slot KB → resume slot (dual-slot material, P0-2) */
@@ -109,7 +113,8 @@ export function App() {
   // already put to a continuous answer (K-A or the answer hotkey). A ref, not
   // session state: both triggers can fire before React re-renders.
   const answeredRef = useRef<Record<string, number>>({});
-  const answerLangRef = useRef<AnswerLang>('chinese');
+  const captureBusyRef = useRef(false);
+  const answerRef = useRef<AnswerSessionHandle>(null);
   const loaded = useRef(false);
 
   // UI language: settings-driven; ref mirror so stable callbacks stay fresh
@@ -157,10 +162,17 @@ export function App() {
     ]);
   }, []);
 
-  /** current session's dual-slot material (resume / JD / rolling memo) */
-  const currentMaterial = useCallback((): { resume?: string; jd?: string; memo?: string } => {
+  /** current session's prompt inputs: interview type + dual-slot material
+   * (resume / JD / rolling memo) */
+  const currentMaterial = useCallback((): {
+    interviewType: InterviewType;
+    resume?: string;
+    jd?: string;
+    memo?: string;
+  } => {
     const s = sessionsRef.current.find((x) => x.id === currentIdRef.current);
     return {
+      interviewType: s?.interviewType ?? 'tech',
       resume: s?.resumeText || undefined,
       jd: s?.jdText || undefined,
       memo: s?.memo || undefined,
@@ -171,7 +183,7 @@ export function App() {
   const prewarm = useCallback(
     (immediate: boolean) => {
       const m = currentMaterial();
-      window.mc.prewarm({ resume: m.resume, jd: m.jd, immediate });
+      window.mc.prewarm({ resume: m.resume, jd: m.jd, interviewType: m.interviewType, immediate });
     },
     [currentMaterial],
   );
@@ -284,9 +296,7 @@ export function App() {
         mode,
         question: mode === 'free' ? undefined : question,
         freeQuestion: mode === 'free' ? text : undefined,
-        recentTranscript: toPromptLines(recentSegs),
-        transcriptForLog: recentSegs.map((s) => ({ id: s.id, speaker: s.speaker ?? 'them', text: s.text })),
-        answerLang: answerLangRef.current,
+        transcript: recentSegs.map((s) => ({ id: s.id, speaker: s.speaker ?? 'them', text: s.text })),
         history: mode === 'translate' ? undefined : buildHistory(),
         visualContext: visualContext?.length ? visualContext : undefined,
         ...material,
@@ -358,7 +368,6 @@ export function App() {
   useEffect(() => {
     void window.mc.getSettings().then((s) => {
       setSettings(s);
-      answerLangRef.current = s.llm.answerLang;
     });
     void window.mc.loadSessions().then((f) => {
       if (f.sessions.length) {
@@ -518,11 +527,11 @@ export function App() {
     return () => clearTimeout(t);
   }, [kbNotice]);
 
-  // switching sessions swaps the material → prefix dirty (reheats if capturing)
+  // switching sessions or interview type swaps the prefix → dirty (reheats if capturing)
   useEffect(() => {
     if (!loaded.current || !currentId) return;
     prewarm(false);
-  }, [currentId, prewarm]);
+  }, [currentId, current?.interviewType, prewarm]);
 
   // continuous mode: only the OTHER party's questions trigger it (never my own
   // mic), question-gated + append, per current session.
@@ -545,7 +554,11 @@ export function App() {
   const startCapture = useCallback(async () => {
     const inputMode = captureKindForPlatform(window.mc.platform) === 'input';
     const cap = inputMode ? themInputRef.current! : loopbackRef.current!;
-    if (cap.running) return;
+    // cap.running only turns true once start() resolves; a second call while
+    // getDisplayMedia is pending (capture hotkey pressed twice) would open a
+    // second stream sending the same audio again
+    if (cap.running || captureBusyRef.current) return;
+    captureBusyRef.current = true;
     try {
       if (inputMode) {
         await themInputRef.current!.start(
@@ -562,18 +575,26 @@ export function App() {
       prewarm(true); // ▶ = the meeting starts — build the KV prefix cache now
     } catch (e) {
       setAsr((s) => ({ ...s, lastError: tRef.current.app.captureStartFail((e as Error).message) }));
+    } finally {
+      captureBusyRef.current = false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const stopCapture = useCallback(async () => {
+    if (captureBusyRef.current) return;
+    captureBusyRef.current = true;
     const cap =
       captureKindForPlatform(window.mc.platform) === 'input'
         ? themInputRef.current!
         : loopbackRef.current!;
-    await cap.stop();
-    window.mc.captureStopped();
-    setCapturing(false);
+    try {
+      await cap.stop();
+      window.mc.captureStopped();
+      setCapturing(false);
+    } finally {
+      captureBusyRef.current = false;
+    }
   }, []);
 
   // 🎤 独立麦克风采集：只转麦克风(我)，与系统声音互不影响，按钮直接控制起停
@@ -625,15 +646,12 @@ export function App() {
     setSettings({ ...settings, ui: { ...settings.ui, stealth: on } });
   }, [settings]);
 
-  const toggleAnswerLang = useCallback(async () => {
-    if (!settings) return;
-    const next: AnswerLang = settings.llm.answerLang === 'chinese' ? 'english' : 'chinese';
-    answerLangRef.current = next;
-    const updated = await window.mc.setSettings({ llm: { answerLang: next } });
-    setSettings(updated);
-    answerLangRef.current = updated.llm.answerLang;
-    prewarm(false); // lang is part of the stable prefix → mark dirty / reheat
-  }, [settings, prewarm]);
+  const toggleInterviewType = useCallback(() => {
+    patchSession(currentIdRef.current, (s) => ({
+      ...s,
+      interviewType: (s.interviewType ?? 'tech') === 'tech' ? 'hr' : 'tech',
+    }));
+  }, [patchSession]);
 
   const toggleAnswerModel = useCallback(async () => {
     if (!settings) return;
@@ -698,7 +716,9 @@ export function App() {
   );
 
   const createSession = useCallback(() => {
-    const s = newSession(tRef.current.app.sessionN(sessionsRef.current.length + 1));
+    // a new session starts with the interview type of the one it is created from
+    const from = sessionsRef.current.find((x) => x.id === currentIdRef.current);
+    const s = newSession(tRef.current.app.sessionN(sessionsRef.current.length + 1), from?.interviewType);
     setSessions((list) => [...list, s]);
     setCurrentId(s.id);
   }, []);
@@ -792,8 +812,13 @@ export function App() {
         case 'answer':
           void askLlm('continuous');
           return;
+        case 'freeAsk':
+          answerRef.current?.submit();
+          return;
         case 'capture':
-          if (!capturing && asr.phase === 'ready') void startCapture();
+          // same toggle as the 开始/停止 button
+          if (capturing) void stopCapture();
+          else if (asr.phase === 'ready') void startCapture();
           return;
         case 'clearAnswers':
           clearAnswers();
@@ -810,6 +835,7 @@ export function App() {
     capturing,
     asr.phase,
     startCapture,
+    stopCapture,
     askLlm,
     captureShot,
     undoLastShot,
@@ -838,6 +864,7 @@ export function App() {
       window.mc.prewarm({
         resume: slot === 'resume' ? r.text : currentMaterial().resume,
         jd: slot === 'jd' ? r.text : currentMaterial().jd,
+        interviewType: currentMaterial().interviewType,
         immediate: true,
       });
     },
@@ -855,6 +882,7 @@ export function App() {
       window.mc.prewarm({
         resume: slot === 'resume' ? undefined : currentMaterial().resume,
         jd: slot === 'jd' ? undefined : currentMaterial().jd,
+        interviewType: currentMaterial().interviewType,
       });
     },
     [patchSession, currentMaterial],
@@ -943,8 +971,8 @@ export function App() {
           >
             {settings?.llm.answerWithVision ? t.titlebar.vision : t.titlebar.textOnly}
           </button>
-          <button className="btn" onClick={() => void toggleAnswerLang()} title={t.titlebar.answerLangTitle}>
-            {t.titlebar.answerLang(settings?.llm.answerLang === 'english')}
+          <button className="btn" onClick={toggleInterviewType} title={t.titlebar.interviewTypeTitle}>
+            {t.titlebar.interviewType(current?.interviewType === 'hr')}
           </button>
           <button
             className={micActive ? 'btn btn-live' : 'btn'}
@@ -1049,7 +1077,6 @@ export function App() {
           settings={settings}
           onSaved={(s) => {
             setSettings(s);
-            answerLangRef.current = s.llm.answerLang;
             setShowSettings(false);
           }}
           onClose={() => setShowSettings(false)}
@@ -1079,6 +1106,7 @@ export function App() {
           onClear={clearTranscript}
         />
         <AnswerSession
+          ref={answerRef}
           sessions={sessions}
           currentId={currentId}
           turns={current?.turns ?? []}

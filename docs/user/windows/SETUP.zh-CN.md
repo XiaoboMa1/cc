@@ -74,11 +74,12 @@ C:/ProgramData/miniconda3/Scripts/conda.exe run -n moss-asr python -m pip instal
 | --- | --- |
 | Control+B | 隐藏 / 呼出窗口 |
 | Control+方向键 | 窗口移动 40 px |
-| Control+S | 开始采集系统声音 |
+| Control+S | 开始 / 停止采集系统声音（等同「开始」/「停止」按钮） |
 | Control+H | 框选截图加入视觉上下文队列（拖动，或在两个角各按一次 Control+Shift+A；Esc 取消） |
 | Control+L | 删除队列里最后一张截图 |
 | Control+R | 清空截图队列 |
 | Control+Enter | 立即回答：上次回答之后面试官的话 + 队列里的截图 |
+| Control+M | 发送右栏输入框里的问题（等同点「问」） |
 | Control+D | 清空本会话回答 |
 | Control+T | 清空本会话转录 |
 

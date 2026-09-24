@@ -7,8 +7,7 @@ import type { ProviderTestCode, UiLang } from '../shared/protocol';
  * is a compile error. Interpolated strings are plain functions.
  *
  * This only covers the RENDERER chrome. It deliberately does NOT touch:
- *  - answerLang (what language the LLM replies in — an independent toggle)
- *  - LLM prompts (electron/llm/prompts.ts)
+ *  - LLM prompts (electron/llm/prompts.ts; answers are always English)
  *  - deep engine diagnostics (they surface verbatim from the ASR/sidecar layer)
  */
 const zh = {
@@ -45,8 +44,9 @@ const zh = {
     vision: '多模态',
     textOnly: '纯文本',
     modelTitle: '回答用的模型：纯文本大模型（快） ⇄ 多模态模型（可截图问答）',
-    answerLang: (en: boolean) => `答:${en ? 'EN' : '中'}`,
-    answerLangTitle: 'AI 回答语言：中/英切换',
+    interviewType: (hr: boolean): string => (hr ? '面:HR' : '面:技术'),
+    interviewTypeTitle:
+      '本会话的面试类型，决定 AI 用哪套提示词：技术（编程 / 系统设计 / 概念讲解）或 HR（行为 / 动机 / 简历深挖）。新建会话沿用当前会话的类型。',
     micOn: '🎤录音中',
     micOff: '🎤麦克风',
     micTitle: '麦克风：独立转录你自己的声音（与系统声音互不影响；建议戴耳机避免扬声器回声）',
@@ -366,9 +366,6 @@ const zh = {
       PROVIDER_ERROR: '服务商侧暂时异常，稍后重试。',
       UNKNOWN_ERROR: '复制诊断信息后向我们反馈。',
     } as Record<ProviderTestCode, string>,
-    answerLangLabel: 'AI 回答语言',
-    answerLangZh: '中文',
-    answerLangEn: 'English',
     audioSection: '音频设备',
     themDevice: '对方音频输入（macOS 需选择 BlackHole 等虚拟设备）',
     micDevice: '麦克风设备',
@@ -428,7 +425,8 @@ const zh = {
     hotkeyShotUndo: '撤销上一张截图快捷键（如 Control+L）',
     hotkeyShotClear: '清空截图队列快捷键（如 Control+R）',
     hotkeyAnswer: '立即回答快捷键（上次回答后面试官的话 + 截图队列，如 Control+Enter）',
-    hotkeyCapture: '开始采集系统声音快捷键（如 Control+S）',
+    hotkeyFreeAsk: '发送输入框问题快捷键（等同点「问」，如 Control+M）',
+    hotkeyCapture: '开始 / 停止采集系统声音快捷键（等同点「开始」/「停止」，如 Control+S）',
     hotkeyClearAnswers: '清空本会话回答快捷键（如 Control+D）',
     hotkeyClearTranscript: '清空本会话转录快捷键（如 Control+T）',
     hotkeyMove: '移动窗口：填修饰键，与方向键组合（如 Control）',
@@ -480,8 +478,9 @@ const en: Dict = {
     vision: 'Vision',
     textOnly: 'Text',
     modelTitle: 'Answering model: text-only LLM (fast) ⇄ multimodal model (screenshot Q&A)',
-    answerLang: (en_: boolean) => `A:${en_ ? 'EN' : 'ZH'}`,
-    answerLangTitle: 'AI answer language: Chinese/English',
+    interviewType: (hr: boolean) => (hr ? 'HR' : 'Tech'),
+    interviewTypeTitle:
+      "This session's interview type; it picks the AI prompt: Tech (coding / system design / concepts) or HR (behavioral / motivation / CV deep dive). A new session takes the type of the current one.",
     micOn: '🎤Rec',
     micOff: '🎤Mic',
     micTitle:
@@ -806,9 +805,6 @@ const en: Dict = {
       PROVIDER_ERROR: 'The provider is temporarily failing — retry later.',
       UNKNOWN_ERROR: 'Copy the diagnostics and report it to us.',
     },
-    answerLangLabel: 'AI answer language',
-    answerLangZh: 'Chinese',
-    answerLangEn: 'English',
     audioSection: 'Audio devices',
     themDevice: 'Other-party audio input (macOS needs a virtual device such as BlackHole)',
     micDevice: 'Microphone device',
@@ -868,7 +864,8 @@ const en: Dict = {
     hotkeyShotUndo: 'Undo last screenshot hotkey (e.g. Control+L)',
     hotkeyShotClear: 'Clear screenshot queue hotkey (e.g. Control+R)',
     hotkeyAnswer: 'Answer-now hotkey (interviewer lines since the last answer + screenshot queue, e.g. Control+Enter)',
-    hotkeyCapture: 'Start system-audio capture hotkey (e.g. Control+S)',
+    hotkeyFreeAsk: 'Send the typed question hotkey (same as “Ask”, e.g. Control+M)',
+    hotkeyCapture: 'Start / stop system-audio capture hotkey (same as the Start/Stop button, e.g. Control+S)',
     hotkeyClearAnswers: 'Clear this session’s answers hotkey (e.g. Control+D)',
     hotkeyClearTranscript: 'Clear this session’s transcript hotkey (e.g. Control+T)',
     hotkeyMove: 'Move window: a modifier, combined with the arrow keys (e.g. Control)',

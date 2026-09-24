@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
   HOTKEY_FIELDS,
-  type AnswerLang,
   type AsrLanguage,
   type FontScale,
   type HotkeySettings,
@@ -136,7 +135,6 @@ export function SettingsPanel({
   const t = useT();
   const [baseUrl, setBaseUrl] = useState(settings.llm.baseUrl);
   const [model, setModel] = useState(settings.llm.model);
-  const [answerLang, setAnswerLang] = useState<AnswerLang>(settings.llm.answerLang);
   const [language, setLanguage] = useState<AsrLanguage>(settings.asr.language);
   const [hotkeys, setHotkeys] = useState<Record<string, string>>(() =>
     Object.fromEntries(HOTKEY_FIELDS.map((k) => [k, settings.ui[k]])),
@@ -258,7 +256,6 @@ export function SettingsPanel({
         llm: {
           baseUrl: baseUrl.trim(),
           model: model.trim(),
-          answerLang,
           providerId: providerIdForEndpoint(baseUrl.trim(), model.trim(), 'text-llm'),
           ...(llmApiKey !== undefined ? { apiKey: llmApiKey } : {}),
         },
@@ -600,14 +597,6 @@ export function SettingsPanel({
         })}
       </div>
       {keyRow(t.settings.apiKey, llmKey, 'llm', llmTarget())}
-      <div className="settings-row">
-        <label>{t.settings.answerLangLabel}</label>
-        <select value={answerLang} onChange={(e) => setAnswerLang(e.target.value as AnswerLang)}>
-          <option value="chinese">{t.settings.answerLangZh}</option>
-          <option value="english">{t.settings.answerLangEn}</option>
-        </select>
-      </div>
-
       <div className="settings-row">
         <label>{t.settings.uiLang}</label>
         <select value={uiLang} onChange={(e) => setUiLang(e.target.value as UiLang)}>

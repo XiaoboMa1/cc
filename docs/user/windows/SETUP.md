@@ -88,11 +88,12 @@ While the app runs, these combinations are not passed on to other programs:
 | --- | --- |
 | Control+B | hide / show the window |
 | Control+Arrow | move the window 40 px |
-| Control+S | start system-audio capture |
+| Control+S | start / stop system-audio capture (same as the Start/Stop button) |
 | Control+H | region screenshot into the visual-context queue (drag, or Control+Shift+A at two corners; Esc cancels) |
 | Control+L | remove the last queued screenshot |
 | Control+R | clear the screenshot queue |
 | Control+Enter | answer now: interviewer lines since the last answer + queued screenshots |
+| Control+M | send the question typed in the answer pane (same as “Ask”) |
 | Control+D | clear this session's answers |
 | Control+T | clear this session's transcript |
 

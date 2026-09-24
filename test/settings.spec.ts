@@ -37,7 +37,6 @@ describe('SettingsStore', () => {
     const s = new SettingsStore(file, fakeCipher);
     expect(s.data).toEqual(defaultSettings());
     expect(s.data.llm.model).toBe('deepseek-chat');
-    expect(s.data.llm.answerLang).toBe('chinese');
     expect(s.data.ui.stealth).toBe(true);
     // v2: a brand new profile has never seen the wizard
     expect(s.data.version).toBe(2);
