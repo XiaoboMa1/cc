@@ -6,11 +6,16 @@ export function captureKindForPlatform(platform: string): CaptureKind {
 }
 
 /** Defaults apply only to newly created settings; saved user choices win. */
-export function defaultHotkeysForPlatform(platform: string): { toggle: string; shot: string } {
+export function defaultHotkeysForPlatform(
+  platform: string,
+): { toggle: string; shot: string; shotUndo: string; shotClear: string } {
   if (platform === 'darwin') {
-    return { toggle: 'Command+B', shot: 'Command+Shift+S' };
+    // NOTE: macOS itself intercepts Command+H as "Hide <app>" on most
+    // systems, so globalShortcut.register may lose that race silently — the
+    // user can rebind it in settings if it never fires.
+    return { toggle: 'Command+B', shot: 'Command+H', shotUndo: 'Command+L', shotClear: 'Command+R' };
   }
-  return { toggle: 'Control+B', shot: 'Control+Shift+S' };
+  return { toggle: 'Control+B', shot: 'Control+H', shotUndo: 'Control+L', shotClear: 'Control+R' };
 }
 
 export function whisperExecutionProvidersForPlatform(

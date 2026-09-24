@@ -9,11 +9,15 @@ describe('platform defaults', () => {
   it('uses familiar Command shortcuts on macOS without changing Windows defaults', () => {
     expect(defaultHotkeysForPlatform('darwin')).toEqual({
       toggle: 'Command+B',
-      shot: 'Command+Shift+S',
+      shot: 'Command+H',
+      shotUndo: 'Command+L',
+      shotClear: 'Command+R',
     });
     expect(defaultHotkeysForPlatform('win32')).toEqual({
       toggle: 'Control+B',
-      shot: 'Control+Shift+S',
+      shot: 'Control+H',
+      shotUndo: 'Control+L',
+      shotClear: 'Control+R',
     });
   });
 

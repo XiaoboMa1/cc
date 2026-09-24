@@ -114,6 +114,12 @@ const zh = {
     freePlaceholder: '随便问：基于当前对话向 AI 提问…',
     ask: '问',
     shotTitle: '截图框选问视觉模型（拉框选区域，输入框内容作为问题）',
+    queueLabel: '视觉上下文',
+    queueExtracting: '正在提取截图内容…',
+    queueError: '提取失败',
+    queueRemoveTitle: '移除这张截图',
+    queueClear: '清空截图',
+    queueClearTitle: '清空视觉上下文队列（Ctrl+R）',
   },
   status: {
     state: {
@@ -418,7 +424,9 @@ const zh = {
     otherHint:
       '麦克风开关与多模态切换在标题栏；简历/岗位JD 在右栏「📄简历」「📋JD」按会话导入（支持 docx/pdf）。',
     hotkeyToggle: '呼出/隐藏快捷键',
-    hotkeyShot: '截图快捷键（框选截图问答，如 Control+Shift+S）',
+    hotkeyShot: '截图快捷键（框选截图加入视觉上下文队列，如 Control+H）',
+    hotkeyShotUndo: '撤销上一张截图快捷键（如 Control+L）',
+    hotkeyShotClear: '清空截图队列快捷键（如 Control+R）',
     autoLaunch: '开机自动启动',
     autoLaunchOn: '开启',
     autoLaunchOff: '关闭（默认）',
@@ -538,6 +546,12 @@ const en: Dict = {
     freePlaceholder: 'Ask anything about the current conversation…',
     ask: 'Ask',
     shotTitle: 'Screenshot a region and ask the vision model (input text becomes the question)',
+    queueLabel: 'Visual context',
+    queueExtracting: 'Extracting screenshot…',
+    queueError: 'Extraction failed',
+    queueRemoveTitle: 'Remove this screenshot',
+    queueClear: 'Clear shots',
+    queueClearTitle: 'Clear the visual-context queue (Ctrl+R)',
   },
   status: {
     state: {
@@ -844,7 +858,9 @@ const en: Dict = {
     otherHint:
       'The mic toggle and Text/Vision live in the title bar; import the resume/JD per session via “📄Resume” “📋JD” in the right pane (docx/pdf supported).',
     hotkeyToggle: 'Show/hide hotkey',
-    hotkeyShot: 'Screenshot hotkey (region screenshot Q&A, e.g. Control+Shift+S)',
+    hotkeyShot: 'Screenshot hotkey (region-capture into the visual-context queue, e.g. Control+H)',
+    hotkeyShotUndo: 'Undo last screenshot hotkey (e.g. Control+L)',
+    hotkeyShotClear: 'Clear screenshot queue hotkey (e.g. Control+R)',
     autoLaunch: 'Start at login',
     autoLaunchOn: 'On',
     autoLaunchOff: 'Off (default)',

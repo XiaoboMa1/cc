@@ -14,6 +14,19 @@ export interface AnswerTurn {
 }
 
 /**
+ * R6: one screenshot captured into the visual-context queue (Ctrl+H). The
+ * image lives only in renderer memory (never persisted with the session);
+ * `text` is the cached extraction (E) once `status` reaches 'ready'.
+ */
+export interface ShotQueueItem {
+  id: string;
+  dataUrl: string;
+  status: 'extracting' | 'ready' | 'error';
+  text?: string;
+  error?: string;
+}
+
+/**
  * 智能体 conversation panel (R4) with a multi-session bar. Answers ACCUMULATE
  * as a scrolling session (never replaced); each meeting is its own session
  * with its own knowledge base. The 📷 screenshot button only appears in
@@ -41,6 +54,9 @@ export function AnswerSession({
   onClear,
   onFreeAsk,
   onShotAsk,
+  shotQueue,
+  onShotQueueRemove,
+  onShotQueueClear,
 }: {
   sessions: StoredSession[];
   currentId: string;
@@ -65,6 +81,10 @@ export function AnswerSession({
   onClear: () => void;
   onFreeAsk: (question: string) => void;
   onShotAsk: (question: string, imageDataUrl?: string) => void;
+  /** R6: screenshots queued for the current session (Ctrl+H/L/R) */
+  shotQueue: ShotQueueItem[];
+  onShotQueueRemove: (id: string) => void;
+  onShotQueueClear: () => void;
 }) {
   const t = useT();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -128,7 +148,7 @@ export function AnswerSession({
           </select>
         )}
         <button
-          className="btn btn-sm"
+          className="btn btn-sm session-rename"
           onClick={() => {
             setNameDraft(currentName);
             setEditing(true);
@@ -137,42 +157,46 @@ export function AnswerSession({
         >
           ✎
         </button>
-        <button className="btn btn-sm" onClick={onNew} title={t.answer.newTitle}>
-          ＋
-        </button>
-        <button className="btn btn-sm" onClick={() => onDelete(currentId)} title={t.answer.deleteTitle}>
-          🗑
-        </button>
-        <button
-          className={resumeChars > 0 ? 'btn btn-sm btn-on' : 'btn btn-sm'}
-          onClick={() => onPickKb('resume')}
-          title={
-            resumeChars > 0
-              ? t.answer.resumeSetTitle(resumeName ?? '', resumeChars)
-              : t.answer.resumeEmptyTitle
-          }
-        >
-          📄{resumeChars > 0 ? resumeName ?? t.answer.resume : t.answer.resume}
-        </button>
-        {resumeChars > 0 && (
-          <button className="btn btn-sm" onClick={() => onClearKb('resume')} title={t.answer.resumeRemoveTitle}>
-            ×
+        <div className="session-crud">
+          <button className="btn btn-sm" onClick={onNew} title={t.answer.newTitle}>
+            ＋
           </button>
-        )}
-        <button
-          className={jdChars > 0 ? 'btn btn-sm btn-on' : 'btn btn-sm'}
-          onClick={() => onPickKb('jd')}
-          title={jdChars > 0 ? t.answer.jdSetTitle(jdName ?? '', jdChars) : t.answer.jdEmptyTitle}
-        >
-          📋{jdChars > 0 ? jdName ?? t.answer.jd : t.answer.jd}
-        </button>
-        {jdChars > 0 && (
-          <button className="btn btn-sm" onClick={() => onClearKb('jd')} title={t.answer.jdRemoveTitle}>
-            ×
+          <button className="btn btn-sm" onClick={() => onDelete(currentId)} title={t.answer.deleteTitle}>
+            🗑
           </button>
-        )}
+        </div>
+        <div className="session-kb-tags">
+          <button
+            className={resumeChars > 0 ? 'btn btn-sm btn-on' : 'btn btn-sm'}
+            onClick={() => onPickKb('resume')}
+            title={
+              resumeChars > 0
+                ? t.answer.resumeSetTitle(resumeName ?? '', resumeChars)
+                : t.answer.resumeEmptyTitle
+            }
+          >
+            📄{resumeChars > 0 ? resumeName ?? t.answer.resume : t.answer.resume}
+          </button>
+          {resumeChars > 0 && (
+            <button className="btn btn-sm" onClick={() => onClearKb('resume')} title={t.answer.resumeRemoveTitle}>
+              ×
+            </button>
+          )}
+          <button
+            className={jdChars > 0 ? 'btn btn-sm btn-on' : 'btn btn-sm'}
+            onClick={() => onPickKb('jd')}
+            title={jdChars > 0 ? t.answer.jdSetTitle(jdName ?? '', jdChars) : t.answer.jdEmptyTitle}
+          >
+            📋{jdChars > 0 ? jdName ?? t.answer.jd : t.answer.jd}
+          </button>
+          {jdChars > 0 && (
+            <button className="btn btn-sm" onClick={() => onClearKb('jd')} title={t.answer.jdRemoveTitle}>
+              ×
+            </button>
+          )}
+        </div>
         <span className="session-spacer" />
-        <button className="btn btn-sm" onClick={onClear} title={t.answer.clearTitle}>
+        <button className="btn btn-sm session-clear" onClick={onClear} title={t.answer.clearTitle}>
           {t.answer.clear}
         </button>
       </header>
@@ -220,6 +244,40 @@ export function AnswerSession({
         )}
       </div>
       {!answersReady && <div className="kb-notice">{answersHint}</div>}
+      {shotQueue.length > 0 && (
+        <div className="shot-queue">
+          <span className="shot-queue-label">
+            {t.answer.queueLabel} · {shotQueue.length}
+          </span>
+          {shotQueue.map((item, i) => (
+            <div
+              key={item.id}
+              className={`shot-chip shot-chip-${item.status}`}
+              title={
+                item.status === 'extracting'
+                  ? t.answer.queueExtracting
+                  : item.status === 'error'
+                    ? item.error || t.answer.queueError
+                    : item.text || ''
+              }
+            >
+              <img src={item.dataUrl} alt={`S${i + 1}`} />
+              {item.status === 'extracting' && <span className="shot-chip-flag shot-chip-spin">…</span>}
+              {item.status === 'error' && <span className="shot-chip-flag shot-chip-err">!</span>}
+              <button
+                className="shot-chip-x"
+                onClick={() => onShotQueueRemove(item.id)}
+                title={t.answer.queueRemoveTitle}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button className="btn btn-sm" onClick={onShotQueueClear} title={t.answer.queueClearTitle}>
+            {t.answer.queueClear}
+          </button>
+        </div>
+      )}
       <div className="answer-input">
         <input
           ref={inputRef}

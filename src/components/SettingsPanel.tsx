@@ -149,6 +149,8 @@ export function SettingsPanel({
     settings.asr.localRealtime.model ?? 'fun-asr-nano',
   );
   const [hotkeyShot, setHotkeyShot] = useState(settings.ui.hotkeyShot);
+  const [hotkeyShotUndo, setHotkeyShotUndo] = useState(settings.ui.hotkeyShotUndo);
+  const [hotkeyShotClear, setHotkeyShotClear] = useState(settings.ui.hotkeyShotClear);
   const [autoLaunch, setAutoLaunch] = useState(settings.ui.autoLaunch);
   const [fontScale, setFontScale] = useState<FontScale>(settings.ui.fontScale ?? 'medium');
   const [theme, setTheme] = useState<ThemeMode>(settings.ui.theme ?? 'dark');
@@ -302,6 +304,8 @@ export function SettingsPanel({
         ui: {
           hotkeyToggle: hotkey.trim(),
           hotkeyShot: hotkeyShot.trim(),
+          hotkeyShotUndo: hotkeyShotUndo.trim(),
+          hotkeyShotClear: hotkeyShotClear.trim(),
           fontScale,
           theme,
           lang: uiLang,
@@ -639,6 +643,22 @@ export function SettingsPanel({
         <input
           value={hotkeyShot}
           onChange={(e) => setHotkeyShot(e.target.value)}
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-row">
+        <label>{t.settings.hotkeyShotUndo}</label>
+        <input
+          value={hotkeyShotUndo}
+          onChange={(e) => setHotkeyShotUndo(e.target.value)}
+          spellCheck={false}
+        />
+      </div>
+      <div className="settings-row">
+        <label>{t.settings.hotkeyShotClear}</label>
+        <input
+          value={hotkeyShotClear}
+          onChange={(e) => setHotkeyShotClear(e.target.value)}
           spellCheck={false}
         />
       </div>

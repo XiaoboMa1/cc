@@ -12,8 +12,10 @@
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:debug-log": "set MC_DEBUG_LOG=1&& electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "start:debug-log": "set MC_DEBUG_LOG=1&& electron-vite preview",
     "postinstall": "patch-package",
     "test": "vitest run",
     "test:python": "node tools/run-python-tests.mjs",

@@ -13,6 +13,7 @@ import {
   type PublicSettings,
   type SessionsFile,
   type SettingsPatch,
+  type ShotExtractPayload,
   type TrayCommandPayload,
 } from '../shared/protocol';
 
@@ -47,6 +48,8 @@ export interface McApi {
     background?: string;
     imageDataUrl?: string;
   }): void;
+  /** R6: extract text (E) from one queued screenshot; result on onShotExtractEvent */
+  shotExtract(payload: ShotExtractPayload): void;
   /** capture full screen, drag a stealth region overlay; returns cropped dataURL or null */
   pickRegion(): Promise<string | null>;
   /** overlay-only: fetch the captured background image */
@@ -63,6 +66,12 @@ export interface McApi {
   memoUpdate(p: { memo: string; question: string; answer: string }): Promise<string>;
   onLlmEvent(cb: (ev: LlmEvent) => void): () => void;
   onShotHotkey(cb: () => void): () => void;
+  /** R6: the undo-last-screenshot hotkey was pressed */
+  onShotUndoHotkey(cb: () => void): () => void;
+  /** R6: the clear-screenshot-queue hotkey was pressed */
+  onShotClearHotkey(cb: () => void): () => void;
+  /** R6: extraction result for a queued screenshot */
+  onShotExtractEvent(cb: (ev: LlmEvent) => void): () => void;
   /** tray menu entries only the renderer can service (capture / session /
    * panels). Main has already made the window visible when this fires. */
   onTrayCommand(cb: (payload: TrayCommandPayload) => void): () => void;
@@ -110,6 +119,7 @@ const api: McApi = {
   asrReplay: () => ipcRenderer.invoke(IPC.asrReplay),
   llmAsk: (payload) => ipcRenderer.send(IPC.llmAsk, payload),
   shotAsk: (payload) => ipcRenderer.send(IPC.shotAsk, payload),
+  shotExtract: (payload) => ipcRenderer.send(IPC.shotExtract, payload),
   pickRegion: () => ipcRenderer.invoke(IPC.regionPick),
   regionImage: () => ipcRenderer.invoke(IPC.regionImage),
   regionRect: (r) => ipcRenderer.send(IPC.regionRect, r),
@@ -126,6 +136,21 @@ const api: McApi = {
     const listener = () => cb();
     ipcRenderer.on(IPC.shotHotkey, listener);
     return () => ipcRenderer.removeListener(IPC.shotHotkey, listener);
+  },
+  onShotUndoHotkey: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on(IPC.shotUndoHotkey, listener);
+    return () => ipcRenderer.removeListener(IPC.shotUndoHotkey, listener);
+  },
+  onShotClearHotkey: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on(IPC.shotClearHotkey, listener);
+    return () => ipcRenderer.removeListener(IPC.shotClearHotkey, listener);
+  },
+  onShotExtractEvent: (cb) => {
+    const listener = (_e: Electron.IpcRendererEvent, ev: LlmEvent) => cb(ev);
+    ipcRenderer.on(IPC.shotExtractEvent, listener);
+    return () => ipcRenderer.removeListener(IPC.shotExtractEvent, listener);
   },
   onTrayCommand: (cb) => {
     const listener = (_e: Electron.IpcRendererEvent, payload: TrayCommandPayload) => cb(payload);

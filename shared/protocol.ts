@@ -214,8 +214,13 @@ export interface SettingsFile {
   ui: {
     stealth: boolean;
     hotkeyToggle: string;
-    /** global hotkey for region-screenshot Q&A */
+    /** global hotkey: region-capture a screenshot INTO the visual-context
+     * queue (R6) — no immediate ask; the manual 📷 button still asks at once */
     hotkeyShot: string;
+    /** global hotkey: drop the most recently queued screenshot */
+    hotkeyShotUndo: string;
+    /** global hotkey: empty the whole queued-screenshot visual context */
+    hotkeyShotClear: string;
     opacity: number;
     /** answer-body font size (small=13px / medium=16px / large=19px) */
     fontScale: FontScale;
@@ -296,6 +301,8 @@ export interface PublicSettings {
     stealth: boolean;
     hotkeyToggle: string;
     hotkeyShot: string;
+    hotkeyShotUndo: string;
+    hotkeyShotClear: string;
     opacity: number;
     fontScale: FontScale;
     theme: ThemeMode;
@@ -351,6 +358,8 @@ export interface SettingsPatch {
     stealth?: boolean;
     hotkeyToggle?: string;
     hotkeyShot?: string;
+    hotkeyShotUndo?: string;
+    hotkeyShotClear?: string;
     opacity?: number;
     fontScale?: FontScale;
     theme?: ThemeMode;
@@ -459,13 +468,19 @@ export interface SessionsFile {
 
 export interface LlmAskPayload {
   requestId: string;
+  /** which session this ask belongs to (debug prompt-log keys off this) */
+  sessionId?: string;
   mode: 'segment' | 'continuous' | 'free' | 'translate';
   /** the sentence to answer (segment) or text to translate (translate) */
   question?: string;
   /** free-form question (mode === 'free') */
   freeQuestion?: string;
-  /** recent transcript lines, oldest first */
+  /** recent transcript lines, oldest first — already role-marked for the prompt */
   recentTranscript: string[];
+  /** same window as recentTranscript, structured — debug prompt-log only, never
+   * read by buildAnswerMessages; lets the logger dedupe against what it already
+   * wrote for this session without re-parsing marker text */
+  transcriptForLog?: { id: number; speaker: Speaker; text: string }[];
   /** reply language for segment/continuous/free (translate is always zh) */
   answerLang?: AnswerLang;
   /** prior Q&A turns for session coherence (oldest first) */
@@ -477,12 +492,24 @@ export interface LlmAskPayload {
   jd?: string;
   /** rolling interview memo (P1) */
   memo?: string;
+  /** R6: extracted text (E) from every screenshot currently queued for this
+   * session, oldest first — folded into the prompt as "visual context" */
+  visualContext?: string[];
 }
 
 export type LlmEvent =
   | { requestId: string; kind: 'delta'; text: string }
   | { requestId: string; kind: 'done'; text: string }
   | { requestId: string; kind: 'error'; message: string };
+
+/** R6: renderer -> main, extract text (E) from ONE queued screenshot (ai-ext).
+ * requestId is the queue item's own id (so llmCancel can abort it if the item
+ * is removed mid-extraction); the result streams back on shotExtractEvent as
+ * a plain 'done' | 'error' LlmEvent (never 'delta' — non-streaming). */
+export interface ShotExtractPayload {
+  requestId: string;
+  imageDataUrl: string;
+}
 
 // ---------- System tray (main -> renderer) ----------
 
@@ -542,12 +569,21 @@ export const IPC = {
   appQuit: 'app:quit',
   /** main -> renderer: request auto start capture (dev/E2E) */
   autoStart: 'capture:auto-start',
-  /** main -> renderer: the screenshot hotkey was pressed */
+  /** main -> renderer: the screenshot hotkey was pressed (capture INTO the
+   * visual-context queue; see SettingsFile.ui.hotkeyShot) */
   shotHotkey: 'shot:hotkey',
+  /** main -> renderer: drop the most recently queued screenshot */
+  shotUndoHotkey: 'shot:hotkey:undo',
+  /** main -> renderer: empty the queued-screenshot visual context */
+  shotClearHotkey: 'shot:hotkey:clear',
   /** renderer -> main: start a streaming answer (LlmAskPayload) */
   llmAsk: 'llm:ask',
   /** renderer -> main: screenshot + vision question ({requestId, question}); answer streams on llmEvent */
   shotAsk: 'shot:ask',
+  /** renderer -> main: extract text from one queued screenshot (ShotExtractPayload); result on shotExtractEvent */
+  shotExtract: 'shot:extract',
+  /** main -> renderer: LlmEvent for a shotExtract request ('done' | 'error' only) */
+  shotExtractEvent: 'shot:extract:event',
   /** renderer -> main: cancel a running request (requestId) */
   llmCancel: 'llm:cancel',
   /** main -> renderer: LlmEvent stream */

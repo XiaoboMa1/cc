@@ -32,7 +32,7 @@ const PERSONA = [
   '你输出的内容就是我接下来要照着念的话，必须遵守：',
   '- 全程用第一人称「我」，口语自然，让我可以一字不改地念出来；',
   '- 第一句先给结论或直接回应，再展开 2-3 个短要点；',
-  '- 全文控制在 30-60 秒内可念完（约 150-350 字）；',
+  '- 全文控制在 约 150-350 字；',
   '- 不用 Markdown 标题、编号、加粗等书面格式，分点直接换行；',
   '- 行为/经历类问题按 STAR 展开：情境→任务→行动→结果；',
   '- 技术类问题先一句话讲思路，再给关键点，必要时给复杂度或对比结论；',
@@ -194,6 +194,9 @@ export interface AnswerPromptInput {
   background?: string;
   /** rolling interview memo (P1) — slow-changing block, its own message */
   memo?: string;
+  /** R6: cached extracted text (E) from every screenshot currently queued,
+   * oldest first — segment/continuous only, folded in as "visual context" */
+  visualContext?: string[];
 }
 
 /** Keep the most recent lines within the char budget (oldest dropped first). */
@@ -252,6 +255,31 @@ export function buildVisionMessages(
   ];
 }
 
+/**
+ * R6: screenshot -> extracted text (ai-ext). No question, no persona — just
+ * transcribe what is useful on screen as plain text so it can be cached (E)
+ * and later folded into the next teleprompter answer as visual context.
+ */
+export function buildExtractionMessages(imageDataUrl: string): ChatMessage[] {
+  const sys = [
+    '你是截图信息提取器，只做提取，不作答、不解题、不评论。',
+    '- 有文字（题目/代码/文档/聊天记录）：逐字摘录看得清的关键文字；',
+    '- 是图表/界面/示意图：一两句话说明画的是什么；',
+    '- 内容含糊或看不清：如实说明看不清，不要编造；',
+    '- 直接输出提取结果本身，不要开场白、不要「这张截图显示」这类套话。',
+  ].join('\n');
+  return [
+    { role: 'system', content: sys },
+    {
+      role: 'user',
+      content: [
+        { type: 'image_url', image_url: { url: imageDataUrl } },
+        { type: 'text', text: '提取这张截图的关键信息。' },
+      ],
+    },
+  ];
+}
+
 export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   if (input.mode === 'translate') {
     return buildTranslateMessages(input.question ?? '');
@@ -295,12 +323,18 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   const contextBlock = context.length
     ? `【最近的对话转录】\n${context.join('\n')}`
     : '【最近的对话转录】（暂无）';
+
+  const visual = (input.visualContext ?? []).map((e) => e.trim()).filter(Boolean);
+  const visualBlock = visual.length
+    ? `\n\n【视觉上下文】（截图提取的信息，供参考）\n${visual.map((e, i) => `[图${i + 1}] ${e}`).join('\n\n')}`
+    : '';
+
   const q = (input.question ?? '').trim();
   const hint = q ? questionHint(classifyQuestion(q)) : '';
   const ask = q
     ? `面试官刚才说：\n“${q}”\n${hint ? hint + '\n' : ''}请直接给出我可以照着念的回答。`
     : '基于上面最近的转录，面试官最新的话需要我回应。请直接给出我可以照着念的回答。';
 
-  msgs.push({ role: 'user', content: `${contextBlock}\n\n${ask}` });
+  msgs.push({ role: 'user', content: `${contextBlock}${visualBlock}\n\n${ask}` });
   return msgs;
 }

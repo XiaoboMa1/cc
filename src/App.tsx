@@ -12,6 +12,7 @@ import {
   nextSegmentId,
   percentile,
   reindexSegments,
+  toPromptLines,
   type TranscriptSegment,
 } from '../shared/transcript';
 import { isLikelyQuestion } from '../shared/textHeuristics';
@@ -25,7 +26,7 @@ import { ServiceHealthPanel } from './components/ServiceHealthPanel';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { HelpPanel } from './components/HelpPanel';
 import { StatusBar } from './components/StatusBar';
-import { AnswerSession, type AnswerTurn } from './components/AnswerSession';
+import { AnswerSession, type AnswerTurn, type ShotQueueItem } from './components/AnswerSession';
 import { I18nProvider, getDict, type Dict } from './i18n';
 
 export interface AsrUiState {
@@ -87,6 +88,9 @@ export function App() {
   const [sessions, setSessions] = useState<StoredSession[]>([]);
   const [currentId, setCurrentId] = useState<string>('');
   const [kbNotice, setKbNotice] = useState<string | null>(null);
+  // R6: per-session queued screenshots (Ctrl+H/L/R) — in-memory only, never
+  // persisted with the session (images can't outlast the running app)
+  const [shotQueues, setShotQueues] = useState<Record<string, ShotQueueItem[]>>({});
 
   const loopbackRef = useRef<LoopbackCapture | null>(null);
   const themInputRef = useRef<MicCapture | null>(null);
@@ -95,6 +99,7 @@ export function App() {
   const e2eSamples = useRef<number[]>([]);
   const sessionsRef = useRef<StoredSession[]>([]);
   const currentIdRef = useRef<string>('');
+  const shotQueuesRef = useRef<Record<string, ShotQueueItem[]>>({});
   const answerLangRef = useRef<AnswerLang>('chinese');
   const loaded = useRef(false);
 
@@ -109,12 +114,14 @@ export function App() {
   settingsRef.current = settings;
   sessionsRef.current = sessions;
   currentIdRef.current = currentId;
+  shotQueuesRef.current = shotQueues;
 
   const current = useMemo(
     () => sessions.find((s) => s.id === currentId) ?? null,
     [sessions, currentId],
   );
   const segments = current?.segments ?? [];
+  const currentShotQueue = shotQueues[currentId] ?? [];
 
   const patchSession = useCallback((id: string, fn: (s: StoredSession) => StoredSession) => {
     setSessions((list) => list.map((s) => (s.id === id ? fn(s) : s)));
@@ -211,14 +218,26 @@ export function App() {
       appendTurn(sid, { id: requestId, kind: mode, label, text: '', status: 'streaming' });
       if (mode === 'segment' || mode === 'free') maybeTitle(sid, text);
       const material = mode === 'translate' ? {} : currentMaterial();
+      const recentSegs = segs.slice(-30);
+      // R6: cached extraction (E) from every screenshot currently queued for
+      // this session — folded in as "visual context" (segment/continuous only)
+      const visualContext =
+        mode === 'translate'
+          ? undefined
+          : (shotQueuesRef.current[sid] ?? [])
+              .filter((it) => it.status === 'ready' && it.text)
+              .map((it) => it.text!);
       const payload: LlmAskPayload = {
         requestId,
+        sessionId: sid,
         mode,
         question: mode === 'free' ? undefined : question,
         freeQuestion: mode === 'free' ? text : undefined,
-        recentTranscript: segs.slice(-30).map((s) => s.text),
+        recentTranscript: toPromptLines(recentSegs),
+        transcriptForLog: recentSegs.map((s) => ({ id: s.id, speaker: s.speaker ?? 'them', text: s.text })),
         answerLang: answerLangRef.current,
         history: mode === 'translate' ? undefined : buildHistory(),
+        visualContext: visualContext?.length ? visualContext : undefined,
         ...material,
       };
       window.mc.llmAsk(payload);
@@ -246,11 +265,40 @@ export function App() {
     [appendTurn, currentMaterial, maybeTitle],
   );
 
-  /** region screenshot flow (📷 button or hotkey): drag a region, then ask */
-  const doRegionShot = useCallback(async () => {
+  // ---- R6: queued visual-context screenshots (Ctrl+H capture / Ctrl+L undo
+  // / Ctrl+R clear) — distinct from askShot above, which asks immediately.
+  // Esc during the drag resolves pickRegion() with null BEFORE any of this
+  // runs, so a cancelled capture never reaches the queue or gets extracted. ----
+  const removeShotQueueItem = useCallback((sid: string, id: string) => {
+    const item = shotQueuesRef.current[sid]?.find((it) => it.id === id);
+    if (item?.status === 'extracting') window.mc.llmCancel(id);
+    setShotQueues((q) => ({ ...q, [sid]: (q[sid] ?? []).filter((it) => it.id !== id) }));
+  }, []);
+
+  const captureShot = useCallback(async () => {
     const img = await window.mc.pickRegion();
-    if (img) askShot('', img);
-  }, [askShot]);
+    if (!img) return; // Esc / too-small drag — cancelled, nothing to queue
+    const sid = currentIdRef.current;
+    if (!sid) return;
+    const id = uid('shot');
+    setShotQueues((q) => ({ ...q, [sid]: [...(q[sid] ?? []), { id, dataUrl: img, status: 'extracting' }] }));
+    window.mc.shotExtract({ requestId: id, imageDataUrl: img });
+  }, []);
+
+  const undoLastShot = useCallback(() => {
+    const sid = currentIdRef.current;
+    const list = shotQueuesRef.current[sid] ?? [];
+    const last = list[list.length - 1];
+    if (last) removeShotQueueItem(sid, last.id);
+  }, [removeShotQueueItem]);
+
+  const clearShotQueue = useCallback((sid?: string) => {
+    const id = sid ?? currentIdRef.current;
+    for (const item of shotQueuesRef.current[id] ?? []) {
+      if (item.status === 'extracting') window.mc.llmCancel(item.id);
+    }
+    setShotQueues((q) => ({ ...q, [id]: [] }));
+  }, []);
 
   // ---- boot: load settings + sessions ----
   useEffect(() => {
@@ -356,7 +404,23 @@ export function App() {
       }
     });
 
-    const offShot = window.mc.onShotHotkey(() => void doRegionShot());
+    const offShot = window.mc.onShotHotkey(() => void captureShot());
+    const offShotUndo = window.mc.onShotUndoHotkey(() => undoLastShot());
+    const offShotClear = window.mc.onShotClearHotkey(() => clearShotQueue());
+    const offShotExtract = window.mc.onShotExtractEvent((ev) => {
+      setShotQueues((q) => {
+        const next: Record<string, ShotQueueItem[]> = {};
+        for (const [sid, list] of Object.entries(q)) {
+          next[sid] = list.map((item) => {
+            if (item.id !== ev.requestId) return item;
+            if (ev.kind === 'done') return { ...item, status: 'ready', text: ev.text };
+            if (ev.kind === 'error') return { ...item, status: 'error', error: ev.message };
+            return item; // 'delta': extraction never streams
+          });
+        }
+        return next;
+      });
+    });
 
     window.__mcAutoStart = () => void startCapture();
     // visual-QA hooks (MC_MAIN_SHOT in electron/main.ts): open a panel from the
@@ -367,6 +431,9 @@ export function App() {
       off();
       offLlm();
       offShot();
+      offShotUndo();
+      offShotClear();
+      offShotExtract();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -591,6 +658,14 @@ export function App() {
       setCurrentId((cur) => (cur === id ? next[0].id : cur));
       return next;
     });
+    // S cannot outlast its session: drop the queue, cancelling any extraction
+    for (const item of shotQueuesRef.current[id] ?? []) {
+      if (item.status === 'extracting') window.mc.llmCancel(item.id);
+    }
+    setShotQueues((q) => {
+      const { [id]: _dropped, ...rest } = q;
+      return rest;
+    });
   }, []);
 
   const renameSession = useCallback(
@@ -805,6 +880,8 @@ export function App() {
           <button className="btn" onClick={() => setShowHud((v) => !v)} title={t.titlebar.hudTitle}>
             HUD
           </button>
+        </div>
+        <div className="titlebar-window-controls">
           <button className="btn" onClick={() => setShowSettings((v) => !v)} title={t.titlebar.settingsTitle}>
             ⚙
           </button>
@@ -921,6 +998,9 @@ export function App() {
           onClear={() => patchSession(currentIdRef.current, (s) => ({ ...s, turns: [] }))}
           onFreeAsk={(q) => askLlm('free', q)}
           onShotAsk={askShot}
+          shotQueue={currentShotQueue}
+          onShotQueueRemove={(id) => removeShotQueueItem(currentIdRef.current, id)}
+          onShotQueueClear={() => clearShotQueue()}
         />
       </div>
 

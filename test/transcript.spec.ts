@@ -5,6 +5,8 @@ import {
   nextSegmentId,
   percentile,
   reindexSegments,
+  speakerMarker,
+  toPromptLines,
   type TranscriptSegment,
 } from '../shared/transcript';
 
@@ -19,6 +21,25 @@ describe('joinTexts', () => {
     expect(joinTexts('我们用的是 React', '和 TypeScript')).toBe('我们用的是 React和 TypeScript');
     expect(joinTexts('', 'x')).toBe('x');
     expect(joinTexts('x', '')).toBe('x');
+  });
+});
+
+describe('speakerMarker / toPromptLines', () => {
+  it('marks system-audio (them/undefined) as interviewer, mic (me) as interviewee', () => {
+    expect(speakerMarker('them')).toBe('### interviewer:');
+    expect(speakerMarker(undefined)).toBe('### interviewer:');
+    expect(speakerMarker('me')).toBe('### interviewee:');
+  });
+
+  it('tags each segment by source before it reaches the prompt', () => {
+    const lines = toPromptLines([
+      { ...seg(1, 'Even though it is investing in exactly...', 0, 1), speaker: 'them' },
+      { ...seg(2, '如果我把中文和英文混在一起说，你能听出来吗？', 1000, 2000), speaker: 'me' },
+    ]);
+    expect(lines).toEqual([
+      '### interviewer: Even though it is investing in exactly...',
+      '### interviewee: 如果我把中文和英文混在一起说，你能听出来吗？',
+    ]);
   });
 });
 

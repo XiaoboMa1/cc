@@ -15,9 +15,9 @@ import {
   session,
   shell,
 } from 'electron';
-import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { release } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import {
   captureKindForPlatform,
   whisperExecutionProvidersForPlatform,
@@ -38,6 +38,14 @@ import { SETUP_READY_MARKER, createSetupWindow } from './setupWindow';
 import { AppTray, trayIconPath } from './tray';
 import { isRendererCommand, type TrayCommand, type TrayMenuState } from '../shared/trayMenu';
 import { KnowledgeStore } from './knowledge';
+import {
+  diffTranscriptForLog,
+  formatPromptLogError,
+  formatPromptLogRequest,
+  formatPromptLogResponse,
+  formatTranscriptLogLines,
+  syncPromptLogSession,
+} from './promptLog';
 import { SessionStore } from './sessions';
 import { DOC_EXTENSIONS, extractDocText } from './docparse';
 import { basename } from 'path';
@@ -45,6 +53,7 @@ import { chatOnce, chatStream, type ChatResult } from './llm/adapter';
 import { visionChat } from './llm/vision';
 import {
   buildAnswerMessages,
+  buildExtractionMessages,
   buildMemoUpdateMessages,
   buildPrewarmMessages,
   buildStablePrefix,
@@ -62,7 +71,9 @@ import {
   type OnboardingProgressPatch,
   type ProviderTestRequest,
   type ProviderTestResult,
+  type SessionsFile,
   type SettingsPatch,
+  type ShotExtractPayload,
 } from '../shared/protocol';
 import { mainStrings } from './uiStrings';
 
@@ -101,6 +112,34 @@ app.setName('MeetingCopilot');
 // E2E/demo hook: run against an isolated profile — must precede the
 // single-instance lock so a test instance never collides with a real one
 if (process.env.MC_USERDATA) app.setPath('userData', process.env.MC_USERDATA);
+
+// Debug-only prompt/response log — OFF unless enabled. Local disk only (see
+// electron/promptLog.ts for why this is kept separate from diagnostics.ts's
+// upload-safe report). Two ways to turn it on:
+//   - `--debug-log` on the launch command (start.bat --debug-log, or
+//     `npm run start:debug-log` / `npm run dev:debug-log`) — auto-creates
+//     debug-log/<month>-<day>-<hour><minute>.log under the project root.
+//   - MC_PROMPT_LOG=<exact path> — explicit override, takes precedence.
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const now = new Date();
+const PROMPT_LOG_PATH =
+  process.env.MC_PROMPT_LOG ??
+  (process.env.MC_DEBUG_LOG || process.argv.includes('--debug-log')
+    ? join(
+        app.getAppPath(),
+        'debug-log',
+        `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}-${pad2(now.getHours())}${pad2(now.getMinutes())}.log`,
+      )
+    : undefined);
+function appendPromptLog(text: string): void {
+  if (!PROMPT_LOG_PATH) return;
+  try {
+    mkdirSync(dirname(PROMPT_LOG_PATH), { recursive: true });
+    appendFileSync(PROMPT_LOG_PATH, text, 'utf8');
+  } catch (e) {
+    console.error('[prompt-log] write failed:', (e as Error).message);
+  }
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -319,6 +358,8 @@ function bootstrap(): void {
     globalShortcut.unregisterAll();
     const toggle = settings.data.ui.hotkeyToggle;
     const shot = settings.data.ui.hotkeyShot;
+    const shotUndo = settings.data.ui.hotkeyShotUndo;
+    const shotClear = settings.data.ui.hotkeyShotClear;
     try {
       if (toggle) {
         const ok = globalShortcut.register(toggle, () => toggleWindow());
@@ -327,6 +368,14 @@ function bootstrap(): void {
       if (shot) {
         const ok = globalShortcut.register(shot, () => win?.webContents.send(IPC.shotHotkey));
         if (!ok) console.warn(`[main] shot hotkey ${shot} registration failed (in use?)`);
+      }
+      if (shotUndo) {
+        const ok = globalShortcut.register(shotUndo, () => win?.webContents.send(IPC.shotUndoHotkey));
+        if (!ok) console.warn(`[main] shot-undo hotkey ${shotUndo} registration failed (in use?)`);
+      }
+      if (shotClear) {
+        const ok = globalShortcut.register(shotClear, () => win?.webContents.send(IPC.shotClearHotkey));
+        if (!ok) console.warn(`[main] shot-clear hotkey ${shotClear} registration failed (in use?)`);
       }
     } catch (e) {
       console.warn('[main] hotkey register error:', (e as Error).message);
@@ -631,7 +680,12 @@ function bootstrap(): void {
     ipcMain.handle(IPC.asrReplay, () => ({ ready: asr.lastReady, status: asr.lastStatus }));
     ipcMain.handle(IPC.settingsSet, (_e, patch: SettingsPatch) => {
       settings.applyPatch(patch);
-      if (patch.ui?.hotkeyToggle !== undefined || patch.ui?.hotkeyShot !== undefined) {
+      if (
+        patch.ui?.hotkeyToggle !== undefined ||
+        patch.ui?.hotkeyShot !== undefined ||
+        patch.ui?.hotkeyShotUndo !== undefined ||
+        patch.ui?.hotkeyShotClear !== undefined
+      ) {
         registerHotkeys();
       }
       if (patch.ui?.stealth !== undefined) {
@@ -837,7 +891,17 @@ function bootstrap(): void {
       }
     });
     ipcMain.handle(IPC.sessionsLoad, () => sessionStore.load());
-    ipcMain.on(IPC.sessionsSave, (_e, data) => sessionStore.save(data));
+    ipcMain.on(IPC.sessionsSave, (_e, data: SessionsFile) => {
+      sessionStore.save(data);
+      if (PROMPT_LOG_PATH) {
+        for (const s of data.sessions) {
+          syncPromptLogSession(
+            s.id,
+            (s.segments ?? []).map((g) => g.id),
+          );
+        }
+      }
+    });
 
     // ---- region screenshot: capture full screen, let the user drag a region
     // on a STEALTH overlay that shows the capture as its (opaque) background —
@@ -954,7 +1018,40 @@ function bootstrap(): void {
         jd: isTranslate ? undefined : payload.jd,
         memo: isTranslate ? undefined : payload.memo,
         background: isTranslate ? undefined : payload.background || (hasMaterial ? undefined : knowledge.text),
+        visualContext: isTranslate ? undefined : payload.visualContext,
       });
+
+      if (PROMPT_LOG_PATH) {
+        const sid = payload.sessionId ?? 'unknown-session';
+        const { newLines, carriedOverCount } = diffTranscriptForLog(sid, payload.transcriptForLog ?? []);
+        // same builder as the real call, transcript window swapped for only
+        // the not-yet-logged lines — guarantees the logged shape can never
+        // drift from what buildAnswerMessages actually produces
+        const logMessages = buildAnswerMessages({
+          mode: payload.mode,
+          question: payload.question,
+          freeQuestion: payload.freeQuestion,
+          recentTranscript: formatTranscriptLogLines(newLines),
+          answerLang: payload.answerLang ?? settings.data.llm.answerLang,
+          history: payload.history,
+          resume: isTranslate ? undefined : payload.resume,
+          jd: isTranslate ? undefined : payload.jd,
+          memo: isTranslate ? undefined : payload.memo,
+          background: isTranslate ? undefined : payload.background || (hasMaterial ? undefined : knowledge.text),
+          visualContext: isTranslate ? undefined : payload.visualContext,
+        });
+        appendPromptLog(
+          formatPromptLogRequest({
+            at: new Date().toISOString(),
+            sessionId: sid,
+            requestId: payload.requestId,
+            mode: payload.mode,
+            messages: logMessages,
+            newLineCount: newLines.length,
+            carriedOverCount,
+          }),
+        );
+      }
 
       // "answer with multimodal": route through the vision provider (proxy-aware,
       // non-streaming). Otherwise stream from the text LLM (direct, fastest).
@@ -1002,11 +1099,13 @@ function bootstrap(): void {
             );
           }
           sendEv({ requestId: payload.requestId, kind: 'done', text: r.text });
+          if (PROMPT_LOG_PATH) appendPromptLog(formatPromptLogResponse(payload.requestId, r.text));
         })
         .catch((e: Error) => {
           if (ac.signal.aborted) return; // user cancelled — not an error
           console.error('[llm] request failed:', e.message);
           sendEv({ requestId: payload.requestId, kind: 'error', message: e.message });
+          if (PROMPT_LOG_PATH) appendPromptLog(formatPromptLogError(payload.requestId, e.message));
         })
         .finally(() => llmControllers.delete(payload.requestId));
     });
@@ -1088,6 +1187,33 @@ function bootstrap(): void {
         .catch((e: Error) => {
           if (ac.signal.aborted) return;
           console.error('[vision] request failed:', e.message);
+          sendEv({ requestId: payload.requestId, kind: 'error', message: e.message });
+        })
+        .finally(() => llmControllers.delete(payload.requestId));
+    });
+
+    // ---- R6: screenshot -> extracted text (ai-ext), queued visual context.
+    // requestId is the queue item's own id, so a removed-mid-extraction item
+    // aborts cleanly through the SAME llmCancel path as any other request. ----
+    ipcMain.on(IPC.shotExtract, (_e, payload: ShotExtractPayload) => {
+      const sendEv = (ev: LlmEvent) => win?.webContents.send(IPC.shotExtractEvent, ev);
+      const vision = settings.data.vision;
+      const apiKey = settings.getVisionApiKey();
+      if (!vision.baseUrl || !vision.model || !apiKey) {
+        sendEv({ requestId: payload.requestId, kind: 'error', message: T().noVision });
+        return;
+      }
+      const ac = new AbortController();
+      llmControllers.set(payload.requestId, ac);
+      visionChat(
+        { baseUrl: vision.baseUrl, model: vision.model, apiKey, proxyUrl: vision.proxyUrl },
+        buildExtractionMessages(payload.imageDataUrl),
+        ac.signal,
+      )
+        .then((text) => sendEv({ requestId: payload.requestId, kind: 'done', text }))
+        .catch((e: Error) => {
+          if (ac.signal.aborted) return;
+          console.error('[shot-extract] request failed:', e.message);
           sendEv({ requestId: payload.requestId, kind: 'error', message: e.message });
         })
         .finally(() => llmControllers.delete(payload.requestId));

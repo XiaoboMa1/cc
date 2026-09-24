@@ -204,11 +204,31 @@ body {
 
 .titlebar-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
   -webkit-app-region: no-drag;
-  /* English labels run longer than Chinese — wrap instead of overflowing */
-  flex-wrap: wrap;
+  /* narrow window: scroll horizontally instead of wrapping, so the
+     window-control cluster (settings/minimize/close) never gets pushed
+     onto a second row */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
   justify-content: flex-end;
+}
+
+.titlebar-actions::-webkit-scrollbar {
+  height: 3px;
+}
+
+.titlebar-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .btn {
@@ -290,6 +310,7 @@ body {
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-soft);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .pane-title {
@@ -299,8 +320,14 @@ body {
 }
 
 /* session bar */
+.pane-answer {
+  container-type: inline-size;
+  container-name: answer-pane;
+}
+
 .session-bar {
   gap: 5px;
+  flex-wrap: nowrap;
 }
 
 .session-select {
@@ -312,10 +339,54 @@ body {
   padding: 3px 6px;
   max-width: 150px;
   outline: none;
+  flex-shrink: 1;
+}
+
+.session-crud,
+.session-kb-tags {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.session-kb-tags .btn {
+  min-width: 0;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-rename,
+.session-clear {
+  flex-shrink: 0;
 }
 
 .session-spacer {
   flex: 1;
+  min-width: 4px;
+}
+
+/* 右侧AI区变窄时按点击频率收起工具栏：
+   清空 > 会话下拉 > 新建/删除 > 重命名 > 简历/JD 标签，优先级从高到低 */
+@container answer-pane (max-width: 440px) {
+  .session-kb-tags {
+    display: none;
+  }
+}
+
+@container answer-pane (max-width: 360px) {
+  .session-rename {
+    display: none;
+  }
+}
+
+@container answer-pane (max-width: 300px) {
+  .session-crud {
+    display: none;
+  }
+  .session-select {
+    max-width: 96px;
+  }
 }
 
 .settings-hint {
@@ -592,6 +663,84 @@ body {
   50% {
     opacity: 0;
   }
+}
+
+/* R6: queued-screenshot visual context (Ctrl+H/L/R) */
+.shot-queue {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.shot-queue-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.shot-chip {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--btn-border);
+  flex-shrink: 0;
+}
+
+.shot-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.shot-chip-extracting {
+  border-color: var(--tag-wait-text);
+}
+
+.shot-chip-error {
+  border-color: var(--danger);
+}
+
+.shot-chip-flag {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.shot-chip-err {
+  color: var(--danger);
+}
+
+.shot-chip-x {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 13px;
+  height: 13px;
+  line-height: 11px;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 0 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.shot-chip-x:hover {
+  background: var(--danger);
 }
 
 .answer-input {

@@ -258,10 +258,17 @@ describe('migrateSettingsV1ToV2 (pure)', () => {
     expect(v2.vision.proxyUrl).toBe('127.0.0.1:7897');
     expect(v2.asr.backend).toBe('cloud-realtime');
     expect(v2.asr.realtime?.baseUrl).toBe(V1_FILE.asr.realtime.baseUrl);
-    // Phase 4 added two ui fields. Everything the user had configured survives
-    // untouched; the new ones arrive with their OFF defaults, so upgrading can
-    // never silently register an existing profile for auto-start.
-    expect(v2.ui).toEqual({ ...V1_FILE.ui, autoLaunch: false, trayNoticeShown: false });
+    // Phase 4 added two ui fields, and R6 added two screenshot-queue hotkeys.
+    // Everything the user had configured survives untouched; the new ones
+    // arrive with their defaults (auto-start OFF; undo/clear get their
+    // platform defaults since a v1 file never had them to preserve).
+    expect(v2.ui).toEqual({
+      ...V1_FILE.ui,
+      autoLaunch: false,
+      trayNoticeShown: false,
+      hotkeyShotUndo: 'Control+L',
+      hotkeyShotClear: 'Control+R',
+    });
     expect(v2.audio).toEqual(V1_FILE.audio);
   });
 

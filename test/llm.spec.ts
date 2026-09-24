@@ -11,6 +11,7 @@ import {
 } from '../electron/llm/adapter';
 import {
   buildAnswerMessages,
+  buildExtractionMessages,
   buildMemoUpdateMessages,
   buildPrewarmMessages,
   buildStablePrefix,
@@ -149,6 +150,59 @@ describe('buildAnswerMessages', () => {
       answerLang: 'english',
     });
     expect(enCont[0].content).toContain('【英文】');
+  });
+});
+
+describe('buildAnswerMessages visual context (R6: queued-screenshot E)', () => {
+  it('folds cached extractions in as a numbered visual-context block', () => {
+    const msgs = buildAnswerMessages({
+      mode: 'continuous',
+      question: '这道题怎么做？',
+      recentTranscript: ['这道题怎么做？'],
+      visualContext: ['题目：反转链表', '白板画的是一棵二叉树'],
+    });
+    const user = msgs[msgs.length - 1].content as string;
+    expect(user).toContain('【视觉上下文】');
+    expect(user).toContain('[图1] 题目：反转链表');
+    expect(user).toContain('[图2] 白板画的是一棵二叉树');
+    // visual context sits after the transcript, before the final ask
+    expect(user.indexOf('【最近的对话转录】')).toBeLessThan(user.indexOf('【视觉上下文】'));
+    expect(user.indexOf('【视觉上下文】')).toBeLessThan(user.indexOf('请直接给出'));
+  });
+
+  it('omits the block entirely when the queue is empty', () => {
+    const empty = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [], visualContext: [] });
+    const blank = buildAnswerMessages({ mode: 'segment', question: 'x', recentTranscript: [] });
+    expect((empty[empty.length - 1].content as string)).not.toContain('【视觉上下文】');
+    expect(empty).toEqual(blank);
+  });
+
+  it('drops blank entries and never leaks into free/translate modes', () => {
+    const msgs = buildAnswerMessages({
+      mode: 'segment',
+      question: 'x',
+      recentTranscript: [],
+      visualContext: ['  ', 'real content'],
+    });
+    const user = msgs[msgs.length - 1].content as string;
+    expect(user).toContain('[图1] real content');
+    expect(user).not.toContain('[图2]');
+
+    const free = buildAnswerMessages({
+      mode: 'free',
+      freeQuestion: 'hi',
+      recentTranscript: [],
+      visualContext: ['leaked?'],
+    });
+    expect(JSON.stringify(free)).not.toContain('leaked?');
+
+    const translate = buildAnswerMessages({
+      mode: 'translate',
+      question: 'hi',
+      recentTranscript: [],
+      visualContext: ['leaked?'],
+    });
+    expect(JSON.stringify(translate)).not.toContain('leaked?');
   });
 });
 
@@ -449,6 +503,24 @@ describe('buildVisionMessages', () => {
     const msgs = buildVisionMessages('  ', 'data:image/png;base64,AAA');
     const content = msgs[1].content as Array<{ type: string; text?: string }>;
     expect(content[1].text).toContain('要点');
+  });
+});
+
+describe('buildExtractionMessages (R6: ai-ext, S -> E)', () => {
+  it('builds one multimodal user message with no question — extraction only', () => {
+    const msgs = buildExtractionMessages('data:image/png;base64,CCC');
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].role).toBe('system');
+    const content = msgs[1].content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({ type: 'image_url', image_url: { url: 'data:image/png;base64,CCC' } });
+    expect(content[1].type).toBe('text');
+  });
+
+  it('instructs the model to only extract, never answer or comment', () => {
+    const msgs = buildExtractionMessages('data:image/png;base64,CCC');
+    const sys = msgs[0].content as string;
+    expect(sys).toContain('不作答');
+    expect(sys).toContain('不要编造');
   });
 });
 
