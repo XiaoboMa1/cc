@@ -113,9 +113,7 @@ The reply becomes the memo in the next answer request (§4 message 2).
 
 ## Debug log
 
-Started with `--debug-log` (e.g. `start.bat --debug-log`), the app writes `debug-log/<MM>-<DD>-<HHmm>.log` in the app folder.
-- Every model call of §2 is written: a header with the request id, the trigger, the session and the time; each message as `[role]` followed by its content (an image as `[image]`); then the reply, or the error.
-- Within one session, `<conversation>` in the log holds only the bubbles not written before; a line above the messages states how many new lines follow and how many earlier ones were left out.
+Specified in `log.md`.
 
 ## Requests in the use cases
 
