@@ -1,0 +1,466 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ---------- theme variables ----------
+ * Renderer JS stamps data-theme='dark'|'light' on <html> (ui.theme; 'system'
+ * resolves via matchMedia). No attribute = dark, so first paint never flashes.
+ * The overlay window is semi-transparent — light theme uses higher-opacity
+ * surfaces so text stays readable over arbitrary desktop content. */
+:root {
+  /* answer-body font size (right pane only; ui.fontScale) */
+  --answer-font-size: 16px;
+
+  --app-bg: rgba(22, 26, 34, 0.8);
+  --app-border: rgba(255, 255, 255, 0.1);
+  --text: #e8eaf0;
+  --text-body: #e3e8f2;
+  --text-muted: #8b95ab;
+  --text-dim: #78829a;
+  --text-faint: #6d7689;
+  --brand-text: #aab3c5;
+
+  --surface: rgba(255, 255, 255, 0.05);
+  --surface-soft: rgba(255, 255, 255, 0.04);
+  --border-1: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.06);
+
+  --btn-bg: rgba(255, 255, 255, 0.08);
+  --btn-border: rgba(255, 255, 255, 0.12);
+  --btn-text: #d3d9e4;
+  --btn-hover: rgba(255, 255, 255, 0.16);
+
+  --accent: #2a6df4;
+  --accent-hover: #3b7bff;
+  --accent-soft: rgba(42, 109, 244, 0.25);
+  --accent-text: #9dc0ff;
+  --section-text: #6f9dff;
+
+  --danger: #d33a3a;
+  --error-text: #ff8a8a;
+
+  --on-bg: rgba(46, 160, 92, 0.28);
+  --on-border: rgba(46, 160, 92, 0.65);
+  --on-text: #86dda9;
+
+  --input-bg: rgba(0, 0, 0, 0.32);
+  --select-bg: rgba(0, 0, 0, 0.3);
+  --settings-bg: rgba(0, 0, 0, 0.25);
+
+  --popup-bg: rgba(20, 24, 32, 0.98);
+  --popup-border: rgba(255, 255, 255, 0.16);
+  --popup-shadow: rgba(0, 0, 0, 0.45);
+
+  --them-bg: rgba(42, 109, 244, 0.12);
+  --them-border: rgba(42, 109, 244, 0.22);
+  --them-border-hover: rgba(42, 109, 244, 0.55);
+  --me-bg: rgba(46, 160, 92, 0.13);
+  --me-border: rgba(46, 160, 92, 0.28);
+  --me-border-hover: rgba(46, 160, 92, 0.6);
+  --trans-text: #9fb0c8;
+  --trans-border: rgba(255, 255, 255, 0.15);
+
+  --turn-bg: rgba(255, 255, 255, 0.04);
+  --turn-border: rgba(255, 255, 255, 0.08);
+
+  --tag-bg: rgba(255, 255, 255, 0.08);
+  --tag-text: #9aa4b8;
+  --tag-ok-bg: rgba(46, 160, 92, 0.22);
+  --tag-ok-text: #86dda9;
+  --tag-live-bg: rgba(211, 58, 58, 0.25);
+  --tag-live-text: #ff9d9d;
+  --tag-wait-bg: rgba(240, 173, 40, 0.18);
+  --tag-wait-text: #ffd58a;
+  --tag-err-bg: rgba(211, 58, 58, 0.3);
+  --tag-err-text: #ff8a8a;
+
+  --hud-text: #cfd5e1;
+  --scrollbar: rgba(255, 255, 255, 0.15);
+}
+
+:root[data-font-scale='small'] {
+  --answer-font-size: 13px;
+}
+:root[data-font-scale='large'] {
+  --answer-font-size: 19px;
+}
+
+:root[data-theme='light'] {
+  --app-bg: rgba(246, 248, 251, 0.93);
+  --app-border: rgba(0, 0, 0, 0.16);
+  --text: #1f2633;
+  --text-body: #1c2434;
+  --text-muted: #5a6474;
+  --text-dim: #667085;
+  --text-faint: #737e92;
+  --brand-text: #4a5568;
+
+  --surface: rgba(0, 0, 0, 0.045);
+  --surface-soft: rgba(0, 0, 0, 0.035);
+  --border-1: rgba(0, 0, 0, 0.1);
+  --border-soft: rgba(0, 0, 0, 0.08);
+
+  --btn-bg: rgba(255, 255, 255, 0.65);
+  --btn-border: rgba(0, 0, 0, 0.16);
+  --btn-text: #2c3547;
+  --btn-hover: rgba(0, 0, 0, 0.08);
+
+  --accent: #2a6df4;
+  --accent-hover: #1e5fe0;
+  --accent-soft: rgba(42, 109, 244, 0.14);
+  --accent-text: #1e5fe0;
+  --section-text: #1e5fe0;
+
+  --danger: #d33a3a;
+  --error-text: #c62828;
+
+  --on-bg: rgba(46, 160, 92, 0.16);
+  --on-border: rgba(46, 160, 92, 0.55);
+  --on-text: #1d7a43;
+
+  --input-bg: rgba(255, 255, 255, 0.85);
+  --select-bg: rgba(255, 255, 255, 0.75);
+  --settings-bg: rgba(255, 255, 255, 0.6);
+
+  --popup-bg: rgba(255, 255, 255, 0.98);
+  --popup-border: rgba(0, 0, 0, 0.16);
+  --popup-shadow: rgba(0, 0, 0, 0.2);
+
+  --them-bg: rgba(42, 109, 244, 0.09);
+  --them-border: rgba(42, 109, 244, 0.3);
+  --them-border-hover: rgba(42, 109, 244, 0.6);
+  --me-bg: rgba(46, 160, 92, 0.1);
+  --me-border: rgba(46, 160, 92, 0.38);
+  --me-border-hover: rgba(46, 160, 92, 0.65);
+  --trans-text: #43536e;
+  --trans-border: rgba(0, 0, 0, 0.15);
+
+  --turn-bg: rgba(255, 255, 255, 0.66);
+  --turn-border: rgba(0, 0, 0, 0.1);
+
+  --tag-bg: rgba(0, 0, 0, 0.06);
+  --tag-text: #5a6474;
+  --tag-ok-bg: rgba(46, 160, 92, 0.16);
+  --tag-ok-text: #1d7a43;
+  --tag-live-bg: rgba(211, 58, 58, 0.14);
+  --tag-live-text: #b03030;
+  --tag-wait-bg: rgba(240, 173, 40, 0.2);
+  --tag-wait-text: #8a6210;
+  --tag-err-bg: rgba(211, 58, 58, 0.16);
+  --tag-err-text: #c62828;
+
+  --hud-text: #333c4d;
+  --scrollbar: rgba(0, 0, 0, 0.22);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  /* lighter than before; readable but not a heavy black slab */
+  background: var(--app-bg);
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  overflow: hidden;
+  backdrop-filter: blur(3px);
+}
+
+/* ---------- titlebar ---------- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-1);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  color: var(--brand-text);
+}
+
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+  /* narrow window: scroll horizontally instead of wrapping, so the
+     window-control cluster (settings/minimize/close) never gets pushed
+     onto a second row */
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  justify-content: flex-end;
+}
+
+.titlebar-actions::-webkit-scrollbar {
+  height: 3px;
+}
+
+.titlebar-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.btn {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--btn-hover);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn-sm {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-live {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn-on {
+  background: var(--on-bg);
+  border-color: var(--on-border);
+  color: var(--on-text);
+}
+
+.btn-close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ---------- two-pane layout ---------- */
+.panes {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pane-transcript {
+  border-right: 1px solid var(--border-1);
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.pane-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.3px;
+}
+
+/* session bar */
+.pane-answer {
+  container-type: inline-size;
+  container-name: answer-pane;
+}
+
+.session-bar {
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.session-select {
+  background: var(--select-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  color: var(--btn-text);
+  font-size: 11px;
+  padding: 3px 6px;
+  max-width: 150px;
+  outline: none;
+  flex-shrink: 1;
+}
+
+.session-crud,
+.session-kb-tags {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.session-kb-tags .btn {
+  min-width: 0;
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-rename,
+.session-clear {
+  flex-shrink: 0;
+}
+
+.session-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+/* 右侧AI区变窄时按点击频率收起工具栏：
+   清空 > 会话下拉 > 新建/删除 > 重命名 > 简历/JD 标签，优先级从高到低 */
+@container answer-pane (max-width: 440px) {
+  .session-kb-tags {
+    display: none;
+  }
+}
+
+@container answer-pane (max-width: 360px) {
+  .session-rename {
+    display: none;
+  }
+}
+
+@container answer-pane (max-width: 300px) {
+  .session-crud {
+    display: none;
+  }
+  .session-select {
+    max-width: 96px;
+  }
+}
+
+.settings-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin: -4px 0 10px;
+  line-height: 1.5;
+}
+
+.pane-hint {
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-right: auto;
+}
+
+.mic-select {
+  background: var(--select-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  color: var(--btn-text);
+  font-size: 11px;
+  padding: 3px 4px;
+  max-width: 90px;
+  outline: none;
+  -webkit-app-region: no-drag;
+}
+
+/* one-time pointer at the setup wizard for profiles migrated from v1 */
+.upgrade-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border-1);
+  flex-shrink: 0;
+}
+
+.upgrade-banner span {
+  margin-right: auto;
+}
+
+/* transient KB parse warning (e.g. scanned PDF with no text layer) */
+.kb-notice {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--tag-wait-text);
+  background: var(--tag-wait-bg);
+  border-bottom: 1px solid var(--border-1);
+  flex-shrink: 0;
+}
+
+/* selection popup for precise answer/translate */
+.sel-popup {
+  position: fixed;
+  transform: translate(-50%, calc(-100% - 8px));
+  display: flex;
+  gap: 6px;
+  padding: 5px 6px;
+  background: var(--popup-bg);
+  border: 1px solid var(--popup-border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--popup-shadow);
+  z-index: 50;
+}
+
+.pane-empty {
+  color: var(--text-faint);
+  text-align: center;
+  margin-top: 32px;
+  line-height: 1.8;
+  padding: 0 18px;
+  font-size: 12px;
+}

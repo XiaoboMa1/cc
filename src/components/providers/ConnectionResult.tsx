@@ -10,7 +10,7 @@
  *    verdict text is produced main-side (ProviderTestResult carries both
  *    languages) while the action hint is mirrored in each renderer dictionary;
  *  - it only uses `.conn-*` class names, which BOTH stylesheets define against
- *    their own theme tokens (src/styles.css and src/onboarding/setup.css).
+ *    their own theme tokens (src/styles/panels.css and src/onboarding/setup-cards.css).
  *
  * It never sees an API key: `ProviderTestResult` deliberately has no field for
  * one, and the raw provider error never leaves the main process.

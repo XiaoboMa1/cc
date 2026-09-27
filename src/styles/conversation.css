@@ -1,0 +1,303 @@
+/* transcript pane + answer session pane; tokens come from base.css */
+
+/* ---------- transcript ---------- */
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.transcript::-webkit-scrollbar,
+.session::-webkit-scrollbar {
+  width: 6px;
+}
+
+.transcript::-webkit-scrollbar-thumb,
+.session::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 3px;
+}
+
+.bubble {
+  border-radius: 10px;
+  padding: 6px 10px 8px;
+  max-width: 88%;
+  cursor: pointer;
+  position: relative;
+}
+
+.bubble-them {
+  background: var(--them-bg);
+  border: 1px solid var(--them-border);
+  align-self: flex-start;
+}
+.bubble-them:hover {
+  border-color: var(--them-border-hover);
+}
+
+.bubble-me {
+  background: var(--me-bg);
+  border: 1px solid var(--me-border);
+  align-self: flex-end;
+}
+.bubble-me:hover {
+  border-color: var(--me-border-hover);
+}
+
+.bubble-role {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.bubble-me .bubble-role {
+  text-align: right;
+}
+
+.bubble-live {
+  opacity: 0.62;
+  border-style: dashed;
+}
+
+.bubble-trans {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--trans-border);
+  color: var(--trans-text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.bubble-text {
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.bubble-meta {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.bubble-btns {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  gap: 4px;
+}
+
+.bubble-ask {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.bubble:hover .bubble-btns {
+  display: flex;
+}
+
+.jump-bottom {
+  position: sticky;
+  bottom: 4px;
+  align-self: center;
+  background: rgba(42, 109, 244, 0.9);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 4px 12px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* ---------- answer session ---------- */
+.session {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turn {
+  background: var(--turn-bg);
+  border: 1px solid var(--turn-border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.turn-translate {
+  border-left-color: #7a5af0;
+}
+.turn-vision {
+  border-left-color: #e08a2a;
+}
+.turn-continuous {
+  border-left-color: #2ea05c;
+}
+
+.turn-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.turn-tag {
+  font-size: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.turn-label {
+  flex: 1;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* answer body follows ui.fontScale (P0-3); the transcript pane stays 13px */
+.turn-body {
+  font-size: var(--answer-font-size);
+  line-height: 1.62;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  color: var(--text-body);
+}
+
+.answer-error {
+  color: var(--error-text);
+}
+
+.cursor {
+  animation: blink 1s step-start infinite;
+  color: var(--accent);
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* R6: queued-screenshot visual context (Ctrl+H/L/R) */
+.shot-queue {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.shot-queue-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.shot-chip {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--btn-border);
+  flex-shrink: 0;
+}
+
+.shot-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.shot-chip-extracting {
+  border-color: var(--tag-wait-text);
+}
+
+.shot-chip-error {
+  border-color: var(--danger);
+}
+
+.shot-chip-flag {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.shot-chip-err {
+  color: var(--danger);
+}
+
+.shot-chip-x {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 13px;
+  height: 13px;
+  line-height: 11px;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 0 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.shot-chip-x:hover {
+  background: var(--danger);
+}
+
+.answer-input {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+
+.answer-input input {
+  flex: 1;
+  min-width: 0;
+  background: var(--input-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+}
+
+.answer-input input:focus {
+  border-color: var(--accent);
+}

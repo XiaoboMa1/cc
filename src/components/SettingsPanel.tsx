@@ -5,15 +5,12 @@ import {
   type FontScale,
   type HotkeySettings,
   type ProviderSlot,
-  type ProviderTestResult,
-  type ProviderVerification,
   type PublicSettings,
   type ThemeMode,
   type UiLang,
 } from '../../shared/protocol';
 import {
   LOCAL_REALTIME_MODELS,
-  PROVIDER_HELP,
   findPresetById,
   findPresetByEndpoint,
   presetsForCapability,
@@ -21,90 +18,12 @@ import {
   type ProviderCapability,
   type ProviderPreset,
 } from '../../shared/providerCatalog';
-import {
-  candidateKeyTest,
-  isTestableTarget,
-  storedKeyTest,
-  type EndpointTarget,
-} from '../../shared/providerTestRequests';
-import { sanitizeApiKeyInput } from '../../shared/keyInput';
+import { candidateKeyTest, storedKeyTest, type EndpointTarget } from '../../shared/providerTestRequests';
 import { listMics } from '../audio/micCapture';
 import { useT } from '../i18n';
-import { ConnectionResult } from './providers/ConnectionResult';
-import { connectionResultCopy, lastTestText } from './providers/copy';
+import { ApiKeyRow, useKeySlot, type KeySlot, type SlotTest } from './providers/ApiKeyRow';
 
 type AsrBackend = 'local' | 'cloud' | 'cloud-realtime' | 'local-realtime';
-
-/**
- * One API-key slot in the panel. Keys are write-only: the renderer never sees
- * a stored key, only whether one exists plus its last-4 hint. Three outcomes
- * feed the save patch — leave alone (undefined), replace (the new plaintext),
- * delete (`''`, which SettingsStore.applyPatch treats as "clear this slot").
- */
-function useKeySlot() {
-  const [value, setValue] = useState('');
-  const [editing, setEditing] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-
-  const reset = (): void => {
-    setValue('');
-    setEditing(false);
-    setPendingDelete(false);
-    setConfirming(false);
-  };
-
-  /** the `apiKey` field for the settings patch, or undefined to keep it */
-  const patchValue = (): string | undefined => {
-    if (pendingDelete) return '';
-    const clean = sanitizeApiKeyInput(value).value;
-    return clean || undefined;
-  };
-
-  return {
-    value,
-    setValue,
-    editing,
-    setEditing,
-    pendingDelete,
-    setPendingDelete,
-    confirming,
-    setConfirming,
-    reset,
-    patchValue,
-  };
-}
-
-type KeySlot = ReturnType<typeof useKeySlot>;
-
-/** in-flight / finished connection test for one provider slot */
-interface SlotTest {
-  testing: boolean;
-  result?: ProviderTestResult;
-  at?: number;
-  /** the IPC itself failed (provider failures arrive as a result, not a throw) */
-  error?: string;
-  /** the verdict belongs to a key that is typed but not saved yet */
-  candidate?: boolean;
-}
-
-/** the public (secret-free) view of one credential slot */
-function publicSlot(
-  s: PublicSettings,
-  slot: ProviderSlot,
-): { apiKeySet: boolean; apiKeyHint?: string; verification?: ProviderVerification } {
-  switch (slot) {
-    case 'llm':
-      return s.llm;
-    case 'vision':
-      return s.vision;
-    case 'asr-cloud':
-      return s.asr.cloud;
-    case 'asr-realtime':
-    default:
-      return s.asr.realtime;
-  }
-}
 
 /**
  * BYOK settings (R7). Reorganised in Phase 2 into 常用 / 高级 (SPEC §G) and
@@ -175,7 +94,6 @@ export function SettingsPanel({
   const [live, setLive] = useState<PublicSettings>(settings);
   const [tests, setTests] = useState<Partial<Record<ProviderSlot, SlotTest>>>({});
   const anyTesting = Object.values(tests).some((s) => s?.testing);
-  const resultCopy = connectionResultCopy(t);
 
   useEffect(() => {
     void listMics()
@@ -212,26 +130,15 @@ export function SettingsPanel({
     }
   };
 
-  /** the provider's own key page, for the failure path */
-  const keyPageFor = (target: EndpointTarget): string | undefined =>
-    findPresetByEndpoint(target.baseUrl, target.model, target.capability)?.help.keyUrl ??
-    PROVIDER_HELP[target.providerId].keyUrl;
-
   /** preset display name in the current UI language */
   const presetName = (p: ProviderPreset): string => (t.uiLang === 'zh' ? p.nameZh : p.nameEn);
 
-  /** a save that would persist at least one NEW plaintext key (a deletion is
-   * `''`, which never writes a secret and therefore needs no warning) */
-  const savesAKey = (): boolean =>
-    [llmKey, visionKey, cloudKey, rtKey].some((s) => {
-      const v = s.patchValue();
-      return v !== undefined && v !== '';
-    });
-
   /** pre-flight: ask before the plaintext leaves the renderer, so 「返回」
-   * really means the key was never persisted */
+   * really means the key was never persisted. Only a save that would persist
+   * a NEW plaintext key asks: a deletion is `''`, which writes no secret. */
   const requestSave = () => {
-    if (settings.weakCrypto && savesAKey()) {
+    const savesAKey = [llmKey, visionKey, cloudKey, rtKey].some((s) => !!s.patchValue());
+    if (settings.weakCrypto && savesAKey) {
       setConfirmWeak(true);
       return;
     }
@@ -343,141 +250,36 @@ export function SettingsPanel({
     );
   };
 
-  const keyRow = (label: string, slot: KeySlot, slotId: ProviderSlot, target: EndpointTarget) => {
-    const pub = publicSlot(live, slotId);
-    const apiKeySet = pub.apiKeySet;
-    const hint = pub.apiKeyHint;
-    const state = tests[slotId];
-    const candidate = sanitizeApiKeyInput(slot.value).value;
-    const canTest =
-      isTestableTarget(target) && !slot.pendingDelete && (candidate !== '' || apiKeySet);
-    const keyUrl = keyPageFor(target);
+  /** one key row; its connection test points at the endpoint typed above */
+  const keyRow = (
+    label: string,
+    keySlot: KeySlot,
+    slot: ProviderSlot,
+    capability: ProviderCapability,
+    rowBaseUrl: string,
+    rowModel: string,
+    proxyUrl = '',
+  ) => {
+    const target: EndpointTarget = {
+      capability,
+      providerId: providerIdForEndpoint(rowBaseUrl.trim(), rowModel.trim(), capability),
+      baseUrl: rowBaseUrl,
+      model: rowModel,
+      slot,
+      ...(proxyUrl.trim() ? { proxyUrl: proxyUrl.trim() } : {}),
+    };
     return (
-      <div className="settings-row">
-        <label>{label}</label>
-        {apiKeySet && !slot.editing && !slot.pendingDelete ? (
-          <div className="key-status">
-            <span className="tag tag-ok">{t.settings.keyConfigured}</span>
-            {hint && <span className="key-mask">{`••••${hint}`}</span>}
-            <button className="btn btn-sm" onClick={() => slot.setEditing(true)}>
-              {t.settings.keyReplace}
-            </button>
-            {slot.confirming ? (
-              <>
-                <span className="settings-inline-hint">{t.settings.keyDeleteConfirm}</span>
-                <button
-                  className="btn btn-sm"
-                  onClick={() => {
-                    slot.setPendingDelete(true);
-                    slot.setConfirming(false);
-                  }}
-                >
-                  {t.settings.keyDeleteYes}
-                </button>
-                <button className="btn btn-sm" onClick={() => slot.setConfirming(false)}>
-                  {t.settings.keyDeleteNo}
-                </button>
-              </>
-            ) : (
-              <button className="btn btn-sm" onClick={() => slot.setConfirming(true)}>
-                {t.settings.keyDelete}
-              </button>
-            )}
-          </div>
-        ) : slot.pendingDelete ? (
-          <div className="key-status">
-            <span className="tag tag-err">{t.settings.keyPendingDelete}</span>
-            <button className="btn btn-sm" onClick={slot.reset}>
-              {t.settings.keyUndoDelete}
-            </button>
-          </div>
-        ) : (
-          <>
-            <input
-              type="password"
-              value={slot.value}
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => slot.setValue(e.target.value)}
-              placeholder={apiKeySet ? t.settings.keyNewPlaceholder : 'sk-…'}
-            />
-            <span className="settings-inline-hint">
-              {apiKeySet ? t.settings.keyKeepPlaceholder : t.settings.keyMissing} ·{' '}
-              {t.settings.keySanitizedHint}
-            </span>
-          </>
-        )}
-
-        <div className="key-status">
-          <button
-            className="btn btn-sm"
-            disabled={!canTest || anyTesting}
-            title={canTest ? undefined : t.settings.testNoKey}
-            onClick={() => void runSlotTest(slotId, target, candidate)}
-          >
-            {state?.testing ? t.settings.testing : t.settings.testConnection}
-          </button>
-          <span className="settings-inline-hint">{lastTestText(t, pub.verification)}</span>
-        </div>
-
-        <ConnectionResult
-          copy={resultCopy}
-          result={state?.result ?? null}
-          testing={state?.testing}
-          message={
-            state?.result
-              ? t.uiLang === 'zh'
-                ? state.result.messageZh
-                : state.result.messageEn
-              : undefined
-          }
-          hint={state?.result ? t.settings.testHints[state.result.code] : undefined}
-          at={state?.at}
-        >
-          {keyUrl && (
-            <button className="btn btn-sm" onClick={() => void window.mc.openExternal(keyUrl)}>
-              {t.settings.testOpenKeyPage}
-            </button>
-          )}
-        </ConnectionResult>
-        {state?.result?.ok && state.candidate && (
-          <span className="settings-inline-hint">{t.settings.testCandidateOk}</span>
-        )}
-        {state?.error && <div className="settings-warn">{state.error}</div>}
-      </div>
+      <ApiKeyRow
+        label={label}
+        keySlot={keySlot}
+        settings={live}
+        target={target}
+        test={tests[slot]}
+        anyTesting={anyTesting}
+        onTest={(candidate) => void runSlotTest(slot, target, candidate)}
+      />
     );
   };
-
-  /** where each key row points its connection test */
-  const llmTarget = (): EndpointTarget => ({
-    capability: 'text-llm',
-    providerId: providerIdForEndpoint(baseUrl.trim(), model.trim(), 'text-llm'),
-    baseUrl,
-    model,
-    slot: 'llm',
-  });
-  const visionTarget = (): EndpointTarget => ({
-    capability: 'vision',
-    providerId: providerIdForEndpoint(visionBaseUrl.trim(), visionModel.trim(), 'vision'),
-    baseUrl: visionBaseUrl,
-    model: visionModel,
-    slot: 'vision',
-    ...(visionProxy.trim() ? { proxyUrl: visionProxy.trim() } : {}),
-  });
-  const cloudTarget = (): EndpointTarget => ({
-    capability: 'asr-segment',
-    providerId: providerIdForEndpoint(cloudBaseUrl.trim(), cloudModel.trim(), 'asr-segment'),
-    baseUrl: cloudBaseUrl,
-    model: cloudModel,
-    slot: 'asr-cloud',
-  });
-  const rtTarget = (): EndpointTarget => ({
-    capability: 'asr-realtime',
-    providerId: providerIdForEndpoint(rtBaseUrl.trim(), rtModel.trim(), 'asr-realtime'),
-    baseUrl: rtBaseUrl,
-    model: rtModel,
-    slot: 'asr-realtime',
-  });
 
   const asrSummary = (): string => {
     if (asrBackend === 'local') return t.settings.asrLocalWhisper;
@@ -492,10 +294,7 @@ export function SettingsPanel({
     return p ? presetName(p) : t.settings.providerCustom;
   };
 
-  const llmSummary = (): string => {
-    const p = findPresetByEndpoint(baseUrl, model, 'text-llm');
-    return p ? presetName(p) : `${model || '—'}`;
-  };
+  const llmPreset = findPresetByEndpoint(baseUrl, model, 'text-llm');
 
   const deviceOptions = (
     <>
@@ -514,7 +313,7 @@ export function SettingsPanel({
       <div className="settings-section">{t.settings.commonSection}</div>
       <div className="settings-hint">
         {t.settings.planSection}: {t.settings.planAsr} — {asrSummary()} · {t.settings.planLlm} —{' '}
-        {llmSummary()}
+        {llmPreset ? presetName(llmPreset) : model || '—'}
       </div>
       {/* said once for the whole panel: every 测试连接 button below costs one
           minimal billable request, and tests only ever run on a click */}
@@ -557,7 +356,7 @@ export function SettingsPanel({
               setRtModel(p.model);
             })}
           </div>
-          {keyRow(t.settings.rtApiKey, rtKey, 'asr-realtime', rtTarget())}
+          {keyRow(t.settings.rtApiKey, rtKey, 'asr-realtime', 'asr-realtime', rtBaseUrl, rtModel)}
         </>
       )}
       {asrBackend === 'cloud' && (
@@ -569,7 +368,7 @@ export function SettingsPanel({
               setCloudModel(p.model);
             })}
           </div>
-          {keyRow(t.settings.cloudApiKey, cloudKey, 'asr-cloud', cloudTarget())}
+          {keyRow(t.settings.cloudApiKey, cloudKey, 'asr-cloud', 'asr-segment', cloudBaseUrl, cloudModel)}
         </>
       )}
       <div className="settings-row">
@@ -590,7 +389,7 @@ export function SettingsPanel({
           setModel(p.model);
         })}
       </div>
-      {keyRow(t.settings.apiKey, llmKey, 'llm', llmTarget())}
+      {keyRow(t.settings.apiKey, llmKey, 'llm', 'text-llm', baseUrl, model)}
       <div className="settings-row">
         <label>{t.settings.uiLang}</label>
         <select value={uiLang} onChange={(e) => setUiLang(e.target.value as UiLang)}>
@@ -722,7 +521,7 @@ export function SettingsPanel({
             spellCheck={false}
           />
         </div>
-        {keyRow(t.settings.visionApiKey, visionKey, 'vision', visionTarget())}
+        {keyRow(t.settings.visionApiKey, visionKey, 'vision', 'vision', visionBaseUrl, visionModel, visionProxy)}
         <div className="settings-row">
           <label>{t.settings.visionProxy}</label>
           <input

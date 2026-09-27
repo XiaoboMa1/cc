@@ -4,7 +4,7 @@ import { useT } from '../i18n';
 
 /**
  * Title bar: capture and mode toggles on the left, window controls on the
- * right. The frameless overlay is dragged by this bar (styles.css .titlebar).
+ * right. The frameless overlay is dragged by this bar (src/styles/base.css .titlebar).
  */
 export function TitleBar({
   settings,
