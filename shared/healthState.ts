@@ -110,10 +110,6 @@ function deriveLlm(settings: PublicSettings): ServiceHealth {
   return { ...base, state: 'untested' };
 }
 
-function deriveAudio(capturing: boolean): ServiceHealth {
-  return { key: 'audio', state: capturing ? 'ok' : 'idle' };
-}
-
 function deriveVision(settings: PublicSettings): ServiceHealth {
   const base: ServiceHealth = {
     key: 'vision',
@@ -131,7 +127,7 @@ function deriveVision(settings: PublicSettings): ServiceHealth {
 export function deriveServiceHealth(input: HealthInput): ServiceHealthReport {
   const asr = deriveAsr(input);
   const llm = deriveLlm(input.settings);
-  const audio = deriveAudio(input.capturing);
+  const audio: ServiceHealth = { key: 'audio', state: input.capturing ? 'ok' : 'idle' };
   const vision = deriveVision(input.settings);
   const answersAvailable = llm.state !== 'unconfigured';
   const transcriptionAvailable = asr.state !== 'unconfigured';

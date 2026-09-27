@@ -14,7 +14,6 @@ import { planDefinition, type KeySlot } from '../../../shared/onboardingPlans';
 import { orderTestTargets, targetFromPreset } from '../../../shared/providerTestRequests';
 import type {
   OnboardingPlan,
-  ProviderSlot,
   ProviderTestRequest,
   ProviderTestResult,
   PublicSettings,
@@ -75,14 +74,11 @@ export function ProviderStep({
         ? t.provider.subtitleTranscription
         : t.provider.subtitleRecommended;
 
-  const labelForSlot = (slot: ProviderSlot): string =>
-    slot === 'llm' ? t.provider.rowLlmTest : t.provider.rowAsrTest;
-
   /** probes for one card, in the order they should be run */
   const testsFor = (slots: KeySlot[]): CardTest[] =>
     orderTestTargets(
       slots.map((slot) => targetFromPreset(slot === 'llm' ? def.llm!.preset : def.asr!.preset, slot)),
-    ).map((target) => ({ id: target.slot, label: labelForSlot(target.slot), target }));
+    ).map((target) => ({ id: target.slot, label: target.slot === 'llm' ? t.provider.rowLlmTest : t.provider.rowAsrTest, target }));
 
   return (
     <div>

@@ -145,14 +145,6 @@ function readString(source: Record<string, unknown>, key: string): string {
   return typeof v === 'string' ? v : '';
 }
 
-function readStatus(source: Record<string, unknown>): number | undefined {
-  for (const key of ['status', 'statusCode', 'httpStatus']) {
-    const v = source[key];
-    if (typeof v === 'number' && v >= 100 && v <= 599) return v;
-  }
-  return undefined;
-}
-
 /**
  * Flatten an unknown thrown value into the facts the rules match on. Walks one
  * level of `cause` because undici wraps connect failures
@@ -180,7 +172,9 @@ export function describeError(err: unknown): ErrorFacts {
     const obj = current as Record<string, unknown>;
     name ||= readString(obj, 'name');
     errno ||= readString(obj, 'code') || readString(obj, 'errno');
-    status ??= readStatus(obj);
+    status ??= [obj.status, obj.statusCode, obj.httpStatus].find(
+      (v): v is number => typeof v === 'number' && v >= 100 && v <= 599,
+    );
     const message = readString(obj, 'message');
     if (message) parts.push(message);
     const body = readString(obj, 'body') || readString(obj, 'responseText');

@@ -151,11 +151,6 @@ export function withoutCandidateKey(req: ProviderTestRequest): ProviderTestReque
 
 // ---------- helpers ----------
 
-/** a local sidecar endpoint authenticates by being on localhost, not by key */
-function isLocalWsEndpoint(baseUrl: string): boolean {
-  return /^ws:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(baseUrl.trim());
-}
-
 function timeoutError(): Error {
   // `name` is what electron/providerErrors.ts matches on -> TIMEOUT
   return Object.assign(new Error('provider connection test timed out'), { name: 'TimeoutError' });
@@ -342,7 +337,9 @@ export async function runProviderTest(
   const ctx: ProviderErrorContext = { capability: req.capability, providerId: req.providerId };
 
   if (!req.baseUrl?.trim() || !req.model?.trim()) return staticFailure('MODEL_NOT_FOUND');
-  if (!apiKey && !isLocalWsEndpoint(req.baseUrl)) return staticFailure('INVALID_KEY');
+  // a local sidecar endpoint authenticates by being on localhost, not by key
+  const localWs = /^ws:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i.test(req.baseUrl.trim());
+  if (!apiKey && !localWs) return staticFailure('INVALID_KEY');
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs);

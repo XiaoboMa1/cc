@@ -13,7 +13,6 @@ import { useState } from 'react';
 import type {
   ProviderSlot,
   ProviderTestResult,
-  ProviderVerification,
   PublicSettings,
 } from '../../shared/protocol';
 import {
@@ -29,7 +28,7 @@ import {
 import { PROVIDER_HELP, findPresetByEndpoint, providerIdForEndpoint } from '../../shared/providerCatalog';
 import { useT } from '../i18n';
 import { ConnectionResult } from './providers/ConnectionResult';
-import { connectionResultCopy } from './providers/copy';
+import { connectionResultCopy, lastTestText } from './providers/copy';
 
 const TONE_CLASS: Record<string, string> = {
   ok: 'tag tag-ok',
@@ -123,12 +122,6 @@ export function ServiceHealthPanel({
     }
   };
 
-  const verificationLine = (v: ProviderVerification | undefined): string => {
-    if (!v?.lastTestAt) return t.settings.testNever;
-    const when = new Date(v.lastTestAt).toLocaleString(t.locale);
-    return v.lastTestOk ? t.settings.testLastOk(when, v.latencyMs) : t.settings.testLastFail(when);
-  };
-
   const row = (h: ServiceHealth, label: string, note?: string) => {
     const target = h.slot ? targetForSlot(settings, h.slot) : undefined;
     const canTest =
@@ -170,7 +163,7 @@ export function ServiceHealthPanel({
         {h.detail && <div className="conn-hint">{h.detail}</div>}
         {/* a slot with nothing configured has nothing to say about test history */}
         {h.slot && !fresh && h.state !== 'off' && h.state !== 'unconfigured' && (
-          <div className="conn-hint">{verificationLine(h.verification)}</div>
+          <div className="conn-hint">{lastTestText(t, h.verification)}</div>
         )}
         {h.slot && (
           <ConnectionResult

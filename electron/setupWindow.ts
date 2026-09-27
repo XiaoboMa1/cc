@@ -21,14 +21,6 @@ export const SETUP_READY_MARKER = '[setup] wizard ready';
 /** logged after an MC_SETUP_SHOT capture (visual-QA tooling greps for it) */
 export const SETUP_SHOT_MARKER = '[setup] screenshot';
 
-/** MC_SETUP_STEP=1..5 opens the wizard directly on that step (visual QA) */
-function forcedStep(): string | null {
-  const raw = process.env.MC_SETUP_STEP;
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= 1 && n <= 5 ? String(n) : null;
-}
-
 /**
  * Visual-QA hook, env-gated exactly like the MC_E2E_* hooks in devHooks.ts:
  * MC_SETUP_SHOT=<dir> writes a PNG of the rendered wizard into <dir> once the
@@ -81,7 +73,9 @@ export function createSetupWindow(): BrowserWindow {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.once('ready-to-show', () => win.show());
 
-  const step = forcedStep();
+  // MC_SETUP_STEP=1..5 opens the wizard directly on that step (visual QA)
+  const forced = Number(process.env.MC_SETUP_STEP);
+  const step = Number.isInteger(forced) && forced >= 1 && forced <= 5 ? String(forced) : null;
   captureIfRequested(win, step);
 
   if (process.env.ELECTRON_RENDERER_URL) {

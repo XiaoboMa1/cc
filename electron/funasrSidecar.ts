@@ -65,15 +65,11 @@ export function mossPythonCandidates(
   return [...new Set(candidates)];
 }
 
-async function canRunPython(candidate: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile(candidate, ['--version'], { timeout: 5_000 }, (error) => resolve(!error));
-  });
-}
-
 export async function resolvePython(
   candidates: string[],
-  probe: (candidate: string) => Promise<boolean> = canRunPython,
+  // default probe: the candidate runs `--version` within 5 s
+  probe: (candidate: string) => Promise<boolean> = (candidate) =>
+    new Promise((resolve) => execFile(candidate, ['--version'], { timeout: 5_000 }, (error) => resolve(!error))),
 ): Promise<string> {
   for (const candidate of candidates) {
     if (await probe(candidate)) return candidate;

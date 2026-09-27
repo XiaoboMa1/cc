@@ -32,18 +32,6 @@ export interface VisionConfig {
 
 let proxiedSession: Session | null = null;
 
-/**
- * Direct calls (MiMo etc.) use the proven defaultSession. Only when a proxy is
- * configured (Gemini) do we use a dedicated partitioned session with proxy
- * rules — keeping the proxy off every other network call.
- */
-async function pickSession(rules: string): Promise<Session> {
-  if (!rules) return session.defaultSession;
-  if (!proxiedSession) proxiedSession = session.fromPartition('vision-proxy');
-  await proxiedSession.setProxy({ proxyRules: rules });
-  return proxiedSession;
-}
-
 export async function visionChat(
   config: VisionConfig,
   messages: ChatMessage[],
@@ -51,8 +39,16 @@ export async function visionChat(
 ): Promise<string> {
   const url = `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   const body = JSON.stringify({ model: config.model, messages, stream: false });
+  // Direct calls (MiMo etc.) use the proven defaultSession. Only when a proxy
+  // is configured (Gemini) do we use a dedicated partitioned session with
+  // proxy rules — keeping the proxy off every other network call.
   const rules = toProxyRules(config.proxyUrl);
-  const ses = await pickSession(rules);
+  let ses = session.defaultSession;
+  if (rules) {
+    proxiedSession ??= session.fromPartition('vision-proxy');
+    await proxiedSession.setProxy({ proxyRules: rules });
+    ses = proxiedSession;
+  }
 
   const raw = await new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = net.request({ method: 'POST', url, session: ses });

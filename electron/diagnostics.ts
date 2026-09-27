@@ -156,12 +156,6 @@ function describeEndpoint(
   return `${provider} / ${model}`;
 }
 
-function describeVerification(v: ProviderVerification | undefined): string {
-  if (!v?.lastTestCode && !v?.lastTestAt) return 'never tested';
-  const latency = v.latencyMs === undefined ? '' : ` (${v.latencyMs} ms)`;
-  return `${v.lastTestCode ?? (v.lastTestOk ? 'OK' : 'UNKNOWN_ERROR')} at ${v.lastTestAt ?? 'unknown time'}${latency}`;
-}
-
 function pad(label: string): string {
   return label.padEnd(21, ' ');
 }
@@ -223,7 +217,14 @@ export function buildDiagnosticsReport(f: DiagnosticsFacts): string {
     `${pad('API keys configured')}: ${keySlots.map(([slot, set]) => `${slot}=${yesNo(set)}`).join(' ')}`,
     `${pad('Key storage')}: ${f.weakCrypto ? 'obfuscated only (OS credential store unavailable)' : 'OS-encrypted'}`,
     `${pad('Last connection test')}:`,
-    ...verifications.map(([slot, v]) => `  ${slot.padEnd(19, ' ')}: ${describeVerification(v)}`),
+    ...verifications.map(([slot, v]) => {
+      const latency = v?.latencyMs === undefined ? '' : ` (${v.latencyMs} ms)`;
+      const verdict =
+        !v?.lastTestCode && !v?.lastTestAt
+          ? 'never tested'
+          : `${v.lastTestCode ?? (v.lastTestOk ? 'OK' : 'UNKNOWN_ERROR')} at ${v.lastTestAt ?? 'unknown time'}${latency}`;
+      return `  ${slot.padEnd(19, ' ')}: ${verdict}`;
+    }),
     '',
     `${pad('Audio capture')}: ${f.capture.active ? 'active' : 'idle'} lastStarted=${f.capture.lastStartedAt ?? 'never'} lastStopped=${f.capture.lastStoppedAt ?? 'never'}`,
     `${pad('System audio device')}: ${s.audio.themDeviceId ? 'selected' : 'system default'}`,

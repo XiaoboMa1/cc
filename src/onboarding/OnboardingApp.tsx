@@ -37,15 +37,6 @@ import { CompleteStep } from './steps/CompleteStep';
 const FIRST_STEP = 1;
 const LAST_STEP = 5;
 
-/** dev/QA hook: `?step=4` jumps straight to a step so every screen can be
- * screenshotted (electron/setupWindow.ts sets it from MC_SETUP_STEP). */
-function stepFromQuery(): number | null {
-  const raw = new URLSearchParams(window.location.search).get('step');
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= FIRST_STEP && n <= LAST_STEP ? n : null;
-}
-
 function applyTheme(theme: ThemeMode): void {
   const resolved =
     theme === 'system'
@@ -106,8 +97,10 @@ export function OnboardingApp() {
         setMicDeviceId(s.audio.micDeviceId ?? '');
         setThemDeviceId(s.audio.themDeviceId ?? '');
         if (o.selectedPlan && o.selectedPlan !== 'advanced') setPlan(o.selectedPlan);
-        const forced = stepFromQuery();
-        if (forced) setStep(forced);
+        // dev/QA hook: `?step=4` jumps straight to a step so every screen can
+        // be screenshotted (electron/setupWindow.ts sets it from MC_SETUP_STEP)
+        const forced = Number(new URLSearchParams(window.location.search).get('step'));
+        if (Number.isInteger(forced) && forced >= FIRST_STEP && forced <= LAST_STEP) setStep(forced);
         else if (o.lastStep && o.lastStep >= FIRST_STEP && o.lastStep <= LAST_STEP) {
           setStep(o.lastStep);
         }

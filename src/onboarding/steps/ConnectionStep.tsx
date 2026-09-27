@@ -290,19 +290,6 @@ export function ConnectionStep({
   const summaryTag =
     summary === 'all-ok' ? 'tag tag-ok' : summary === 'failed' ? 'tag tag-err' : 'tag';
 
-  const storedTagClass = (v: ProviderVerification | undefined): string =>
-    v?.lastTestOk === true ? 'tag tag-ok' : v?.lastTestOk === false ? 'tag tag-err' : 'tag';
-  /** a slot the user saved through 「暂时保存并稍后重试」 reads differently from
-   * one that was simply never touched — the former is a deliberate ○ */
-  const storedTagText = (slot: KeySlot, v: ProviderVerification | undefined): string =>
-    v?.lastTestOk === true
-      ? t.connection.lastOk(v.latencyMs)
-      : v?.lastTestOk === false
-        ? t.connection.lastFail
-        : savedUntested.includes(slot)
-          ? t.connection.savedUntestedTag
-          : t.connection.neverTested;
-
   const runProviderTest = async (row: ProviderRow) => {
     setTesting(row.slot);
     setTestError(null);
@@ -470,6 +457,14 @@ export function ConnectionStep({
             const configured = slotState(settings, row.slot).configured;
             const fresh = results[row.slot];
             const stored = slotVerification(settings, row.slot);
+            // a slot the user saved through 「暂时保存并稍后重试」 reads differently
+            // from one that was simply never touched — the former is a deliberate ○
+            const [storedTag, storedText] =
+              stored?.lastTestOk === true
+                ? ['tag tag-ok', t.connection.lastOk(stored.latencyMs)]
+                : stored?.lastTestOk === false
+                  ? ['tag tag-err', t.connection.lastFail]
+                  : ['tag', savedUntested.includes(row.slot) ? t.connection.savedUntestedTag : t.connection.neverTested];
             return (
               <div className="conn-provider" key={row.slot}>
                 <div className="conn-line">
@@ -477,9 +472,7 @@ export function ConnectionStep({
                   {!configured ? (
                     <span className="tag">{t.connection.noKeyYet}</span>
                   ) : !fresh ? (
-                    <span className={storedTagClass(stored)}>
-                      {storedTagText(row.slot, stored)}
-                    </span>
+                    <span className={storedTag}>{storedText}</span>
                   ) : null}
                   <button
                     className="btn btn-sm"

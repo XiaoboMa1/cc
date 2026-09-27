@@ -53,12 +53,6 @@ export interface ConnectionResultProps {
   children?: ReactNode;
 }
 
-function formatTime(at: string | number | Date | undefined, locale: string): string | null {
-  if (at === undefined) return null;
-  const d = at instanceof Date ? at : new Date(at);
-  return Number.isNaN(d.getTime()) ? null : d.toLocaleString(locale);
-}
-
 export function ConnectionResult({
   copy,
   result,
@@ -79,7 +73,8 @@ export function ConnectionResult({
     : result?.ok
       ? copy.success(result.latencyMs)
       : copy.failed;
-  const time = formatTime(at, copy.locale);
+  const date = at === undefined || at instanceof Date ? at : new Date(at);
+  const time = date && !Number.isNaN(date.getTime()) ? date.toLocaleString(copy.locale) : null;
 
   return (
     <div className="conn-result">

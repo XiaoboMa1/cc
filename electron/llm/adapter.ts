@@ -180,20 +180,14 @@ export async function chatStream(
         full += delta;
         callbacks.onDelta(delta);
       }
-      const u = extractUsage(payload);
-      if (u) usage = u;
+      // DeepSeek streams usage (incl. cache counters) in the final chunk
+      try {
+        usage = (JSON.parse(payload) as { usage?: ChatUsage })?.usage ?? usage;
+      } catch {
+        /* not JSON: no usage in this payload */
+      }
     }
     if (parser.done) break;
   }
   return { text: full, usage };
-}
-
-/** Pull the usage object from an SSE payload if present (DeepSeek final chunk). */
-export function extractUsage(payload: string): ChatUsage | undefined {
-  try {
-    const j = JSON.parse(payload);
-    return j?.usage ?? undefined;
-  } catch {
-    return undefined;
-  }
 }

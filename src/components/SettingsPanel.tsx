@@ -31,7 +31,7 @@ import { sanitizeApiKeyInput } from '../../shared/keyInput';
 import { listMics } from '../audio/micCapture';
 import { useT } from '../i18n';
 import { ConnectionResult } from './providers/ConnectionResult';
-import { connectionResultCopy } from './providers/copy';
+import { connectionResultCopy, lastTestText } from './providers/copy';
 
 type AsrBackend = 'local' | 'cloud' | 'cloud-realtime' | 'local-realtime';
 
@@ -216,12 +216,6 @@ export function SettingsPanel({
   const keyPageFor = (target: EndpointTarget): string | undefined =>
     findPresetByEndpoint(target.baseUrl, target.model, target.capability)?.help.keyUrl ??
     PROVIDER_HELP[target.providerId].keyUrl;
-
-  const verificationSummary = (v: ProviderVerification | undefined): string => {
-    if (!v?.lastTestAt) return t.settings.testNever;
-    const when = new Date(v.lastTestAt).toLocaleString(t.locale);
-    return v.lastTestOk ? t.settings.testLastOk(when, v.latencyMs) : t.settings.testLastFail(when);
-  };
 
   /** preset display name in the current UI language */
   const presetName = (p: ProviderPreset): string => (t.uiLang === 'zh' ? p.nameZh : p.nameEn);
@@ -423,7 +417,7 @@ export function SettingsPanel({
           >
             {state?.testing ? t.settings.testing : t.settings.testConnection}
           </button>
-          <span className="settings-inline-hint">{verificationSummary(pub.verification)}</span>
+          <span className="settings-inline-hint">{lastTestText(t, pub.verification)}</span>
         </div>
 
         <ConnectionResult
