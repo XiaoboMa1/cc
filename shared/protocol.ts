@@ -20,6 +20,12 @@ export interface TranscriptLine {
   speaker: Speaker;
   text: string;
 }
+/** one earlier answer turn as a prompt carries it: the question it answered
+ * ('' when it answered from the screenshots alone) and the answer text */
+export interface QaPair {
+  question: string;
+  answer: string;
+}
 /** per session: which system prompt ai-ans uses (electron/llm/prompts.ts
  * PROMPT_HR — behavioral / motivation / CV deep dive; PROMPT_TECH — coding /
  * system design / concept explanation) */
@@ -475,6 +481,9 @@ export interface StoredTurn {
   id: string;
   kind: 'segment' | 'continuous' | 'free' | 'translate' | 'vision';
   label: string;
+  /** the question sent to the model; '' when there was none (an answer from
+   * the screenshots alone). label shows a placeholder in that case */
+  question?: string;
   text: string;
   status: 'streaming' | 'done' | 'error';
   error?: string;
@@ -524,8 +533,10 @@ export interface LlmAskPayload {
   transcript: TranscriptLine[];
   /** selects the ai-ans system prompt (segment/continuous); default 'tech' */
   interviewType?: InterviewType;
-  /** prior Q&A turns for session coherence (oldest first) */
-  history?: { role: 'user' | 'assistant'; content: string }[];
+  /** earlier 答/持续 turns (oldest first); empty while the mic is on */
+  earlierAnswers?: QaPair[];
+  /** earlier 问 / 截图 turns (oldest first); mode 'free' only */
+  chatHistory?: QaPair[];
   /** legacy single-slot KB (kept for compat; treated as resume material) */
   background?: string;
   /** dual-slot session material (P0-2) */

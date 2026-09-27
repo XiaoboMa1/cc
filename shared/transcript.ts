@@ -25,6 +25,10 @@ export interface AppendOptions {
   mergeWindowMs: number;
   maxMergedChars: number;
   maxSegments: number;
+  /** a bubble that ended at or before this Date.now() is closed to merging:
+   * an answer request already covered it, so later words start a new bubble
+   * instead of turning the answered bubble into a new question */
+  closedUntil?: number;
 }
 
 export const DEFAULT_APPEND_OPTIONS: AppendOptions = {
@@ -63,11 +67,13 @@ export function appendSegment(
   const last = list[list.length - 1];
   // only merge fragments from the SAME speaker (dual-channel: 对方 vs 我);
   // never into a bubble that is translated/translating (译文会与合并后原文错位)
+  // or already answered
   if (
     last &&
     (last.speaker ?? 'them') === (seg.speaker ?? 'them') &&
     !last.translation &&
-    !last.translating
+    !last.translating &&
+    last.endTs > (opts.closedUntil ?? 0)
   ) {
     const gap = seg.startTs - last.endTs;
     const merged = joinTexts(last.text, text);

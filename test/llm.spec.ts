@@ -79,7 +79,7 @@ describe('buildAnswerMessages (segment / continuous)', () => {
     expect(msgs[0].role).toBe('system');
     const user = lastUser(msgs);
     expect(user).toContain('<question>\nWhat is the time complexity?\n</question>');
-    expect(user.indexOf('<conversation>')).toBeLessThan(user.indexOf('<question>'));
+    expect(user.indexOf('<interview_conversation>')).toBeLessThan(user.indexOf('<question>'));
     expect(user.endsWith('Answer the <question> now, in the words I will say.')).toBe(true);
   });
 
@@ -95,15 +95,16 @@ describe('buildAnswerMessages (segment / continuous)', () => {
       ],
     });
     expect(lastUser(msgs)).toContain(
-      '<conversation>\n<interviewer>\nlet me give you an example. if i\nwhat is the number of the operations needed?\n</interviewer>\n' +
-        '<interviewee>\nI think n minus one.\n</interviewee>\n<interviewer>\nwhat about another case\n</interviewer>\n</conversation>',
+      '<interview_conversation>\n<interviewer>\nlet me give you an example. if i\nwhat is the number of the operations needed?\n</interviewer>\n' +
+        '<interviewee>\nI think n minus one.\n</interviewee>\n<interviewer>\nwhat about another case\n</interviewer>\n</interview_conversation>',
     );
   });
 
   it('omits empty blocks instead of printing a placeholder', () => {
     const user = lastUser(buildAnswerMessages({ mode: 'continuous', question: 'q', transcript: [], visualContext: [] }));
-    expect(user).not.toContain('<conversation>');
+    expect(user).not.toContain('<interview_conversation>');
     expect(user).not.toContain('<visual_context>');
+    expect(user).not.toContain('<earlier_answers>');
     expect(user.startsWith('<question>')).toBe(true);
   });
 
@@ -191,7 +192,7 @@ describe('buildAnswerMessages visual context (R6: queued-screenshot E)', () => {
       '<visual_context>\n<screenshot index="1">\nReverse a linked list.\n</screenshot>\n' +
         '<screenshot index="2">\nThe whiteboard shows a binary tree.\n</screenshot>\n</visual_context>',
     );
-    expect(user.indexOf('<visual_context>')).toBeLessThan(user.indexOf('<conversation>'));
+    expect(user.indexOf('<visual_context>')).toBeLessThan(user.indexOf('<interview_conversation>'));
   });
 
   it('drops blank entries and never leaks into free/translate modes', () => {
@@ -228,24 +229,47 @@ describe('isLikelyQuestion (continuous-mode gate)', () => {
   });
 });
 
-describe('buildAnswerMessages history (session coherence)', () => {
-  it('wraps earlier questions in <question> and keeps earlier answers as they are', () => {
-    const history: ChatMessage[] = [
-      { role: 'user', content: 'previous question' },
-      { role: 'assistant', content: 'previous answer' },
-    ];
-    const msgs = buildAnswerMessages({ mode: 'segment', question: 'new question', transcript: [], history });
-    expect(msgs[0].role).toBe('system');
-    expect(msgs[1]).toEqual({ role: 'user', content: '<question>\nprevious question\n</question>' });
-    expect(msgs[2]).toEqual(history[1]);
-    expect(lastUser(msgs)).toContain('new question');
+describe('buildAnswerMessages earlier answers and chat history', () => {
+  it('puts earlier answers in <earlier_answers> after the interview conversation, inside the one user message', () => {
+    const msgs = buildAnswerMessages({
+      mode: 'segment',
+      question: 'new question',
+      transcript: [line(1, 'them', 'previous question')],
+      earlierAnswers: [
+        { question: 'previous question', answer: 'previous answer' },
+        { question: '', answer: 'answer from the screen' },
+      ],
+    });
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user']);
+    const user = lastUser(msgs);
+    expect(user).toContain(
+      '<earlier_answers>\n<turn>\n<asked>\nprevious question\n</asked>\n<answer>\nprevious answer\n</answer>\n</turn>\n' +
+        '<turn>\n<answer>\nanswer from the screen\n</answer>\n</turn>\n</earlier_answers>',
+    );
+    expect(user.indexOf('</interview_conversation>')).toBeLessThan(user.indexOf('<earlier_answers>'));
+    expect(user.indexOf('</earlier_answers>')).toBeLessThan(user.indexOf('<question>'));
   });
-  it('translate mode ignores history entirely', () => {
+  it('free mode: earlier answers as reference, typed questions as chat turns', () => {
+    const msgs = buildAnswerMessages({
+      mode: 'free',
+      freeQuestion: 'which numbers did I give?',
+      transcript: [],
+      earlierAnswers: [{ question: 'q1', answer: 'a1' }],
+      chatHistory: [{ question: 'typed before', answer: 'reply before' }],
+    });
+    expect(msgs[0].content).toContain('<earlier_answers>');
+    expect(msgs.slice(1)).toEqual([
+      { role: 'user', content: 'typed before' },
+      { role: 'assistant', content: 'reply before' },
+      { role: 'user', content: 'which numbers did I give?' },
+    ]);
+  });
+  it('translate mode ignores earlier turns entirely', () => {
     const msgs = buildAnswerMessages({
       mode: 'translate',
       question: 'Hello',
       transcript: [],
-      history: [{ role: 'user', content: 'leak?' }],
+      earlierAnswers: [{ question: 'leak?', answer: 'leak?' }],
     });
     expect(JSON.stringify(msgs)).not.toContain('leak?');
   });
@@ -352,6 +376,11 @@ describe('buildMemoUpdateMessages / clampMemo (P1-5 pure logic)', () => {
   it('marks first-time notes as empty', () => {
     expect(buildMemoUpdateMessages('', 'q', 'a')[1].content).toContain('<current_notes>\nempty\n</current_notes>');
   });
+  it('asks for English notes and names a missing question', () => {
+    const msgs = buildMemoUpdateMessages('', '', 'a');
+    expect(msgs[0].content).toContain('Write the notes in English');
+    expect(msgs[1].content).toContain('<question>\nnone: answered from the screenshots\n</question>');
+  });
   it('clampMemo hard-caps the stored memo', () => {
     expect(clampMemo('x'.repeat(5000))).toHaveLength(MAX_MEMO_CHARS);
     expect(clampMemo('  ok  ')).toBe('ok');
@@ -370,18 +399,15 @@ describe('buildPrewarmMessages (P1-6 prefix-cache warm)', () => {
 });
 
 describe('memo block (rolling interview memo, P1)', () => {
-  it('sits between the stable prefix and the history', () => {
+  it('opens the user message', () => {
     const msgs = buildAnswerMessages({
       mode: 'segment',
       question: 'new question',
       transcript: [],
       memo: 'claimed: three years of backend work',
-      history: [{ role: 'user', content: 'old question' }],
     });
-    expect(msgs[0].role).toBe('system');
-    expect(msgs[1].content).toBe('<interview_memo>\nclaimed: three years of backend work\n</interview_memo>');
-    expect(msgs[2].role).toBe('assistant');
-    expect(msgs[3]).toEqual({ role: 'user', content: '<question>\nold question\n</question>' });
+    expect(msgs.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(lastUser(msgs).startsWith('<interview_memo>\nclaimed: three years of backend work\n</interview_memo>\n\n<question>')).toBe(true);
   });
   it('is omitted entirely when empty', () => {
     const msgs = buildAnswerMessages({ mode: 'segment', question: 'q', transcript: [], memo: ' ' });
@@ -458,6 +484,7 @@ describe('buildExtractionMessages (R6: ai-ext, S -> E)', () => {
     const sys = buildExtractionMessages('data:image/png;base64,CCC')[0].content as string;
     expect(sys).toContain('do not answer, solve or comment');
     expect(sys).toContain('do not guess');
+    expect(sys).toContain('Write in English');
   });
 });
 

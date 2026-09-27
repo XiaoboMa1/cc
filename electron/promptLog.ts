@@ -9,11 +9,15 @@
  * session overlap almost entirely. This tracks, per session, which segment
  * ids have already been written to the log and logs only the ones that
  * haven't — the prompt actually SENT to the model (built from the full
- * window) is untouched; only what lands on disk is trimmed.
+ * window) is untouched; only what lands on disk is trimmed. The system
+ * message is the other repeated part: it is written in full the first time
+ * its exact text appears in the file, then as one line naming that request.
  */
 import type { TranscriptLine } from '../shared/protocol';
 
 const loggedIdsBySession = new Map<string, Set<number>>();
+/** system message text -> the request that wrote it in full */
+const loggedSystem = new Map<string, string>();
 
 /** New segments (not yet logged for this session) + how many were skipped as
  * already-logged. Mutates the per-session bookkeeping. */
@@ -58,11 +62,7 @@ export function syncPromptLogSession(sessionId: string, currentIds: readonly num
 
 export function clearPromptLogState(): void {
   loggedIdsBySession.clear();
-}
-
-function formatMessage(m: { role: string; content: unknown }): string {
-  const content = typeof m.content === 'string' ? m.content : '[multimodal content omitted]';
-  return `[${m.role}]\n${content}`;
+  loggedSystem.clear();
 }
 
 export interface PromptLogRequestInput {
@@ -75,6 +75,7 @@ export interface PromptLogRequestInput {
   carriedOverCount: number;
 }
 
+/** Mutates the system-message bookkeeping: call once per request written. */
 export function formatPromptLogRequest(e: PromptLogRequestInput): string {
   const lines = [`===== REQUEST ${e.requestId} (${e.mode}) session=${e.sessionId} at=${e.at} =====`];
   if (e.newLineCount || e.carriedOverCount) {
@@ -82,7 +83,17 @@ export function formatPromptLogRequest(e: PromptLogRequestInput): string {
       `[transcript window: ${e.newLineCount} new line(s) below, ${e.carriedOverCount} already logged earlier this session — omitted]`,
     );
   }
-  lines.push(...e.messages.map(formatMessage), '');
+  for (const m of e.messages) {
+    const content = typeof m.content === 'string' ? m.content : '[multimodal content omitted]';
+    const first = m.role === 'system' ? loggedSystem.get(content) : undefined;
+    if (first) {
+      lines.push(`[system] same as REQUEST ${first}`);
+      continue;
+    }
+    if (m.role === 'system') loggedSystem.set(content, e.requestId);
+    lines.push(`[${m.role}]\n${content}`);
+  }
+  lines.push('');
   return lines.join('\n');
 }
 

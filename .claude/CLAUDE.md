@@ -8,12 +8,15 @@ D:\dev-assist\meet-copilot\chat\req
 
 ## terms
 
-### media
+### media and text input
 - `sys-au` = system audio; `ier` voice only comes from `sys-au`
 - `mic` = system microphone.  `iee` voice only comes from `mic`
 - S: one screenshot region the user captured. Held in memory only.
 - E: the text ai-ext extracted from one S. Shown as that thumbnail's tooltip.
 - TRA: the session's transcript: one bubble per utterance, marked `对方` (ier, system audio) or `我` (iee, microphone), in time order.
+- Q-iee: Interviewee (user)'s question (text input for "问", separate)
+- Q-ier: Interviewer's question(from TRA)
+- A: ai-ans output
 
 ### participants
 - ier = interviewer
@@ -45,3 +48,7 @@ K-A = Trigger `keep answering`
 the requiremnet doc must:
 -  describe  ONLY user view: operation sequence, what is seen after each operation; requirement specification is not implementation doc
 - contain multi-turn use cases 
+3. user jargons:
+- pro: prompt (e.g., sys-pro = system prompt)
+- kbd-shr: keyboard shrotcut
+- bub: bubble

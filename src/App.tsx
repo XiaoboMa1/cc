@@ -8,6 +8,7 @@ import type {
   StoredSession,
 } from '../shared/protocol';
 import {
+  DEFAULT_APPEND_OPTIONS,
   appendSegment,
   nextSegmentId,
   percentile,
@@ -152,16 +153,6 @@ export function App() {
     [patchSession],
   );
 
-  const buildHistory = useCallback((): { role: 'user' | 'assistant'; content: string }[] => {
-    const s = sessionsRef.current.find((x) => x.id === currentIdRef.current);
-    if (!s) return [];
-    const done = s.turns.filter((t) => t.status === 'done' && t.kind !== 'translate').slice(-HISTORY_TURNS);
-    return done.flatMap((t) => [
-      { role: 'user' as const, content: t.label },
-      { role: 'assistant' as const, content: t.text },
-    ]);
-  }, []);
-
   /** current session's prompt inputs: interview type + dual-slot material
    * (resume / JD / rolling memo) */
   const currentMaterial = useCallback((): {
@@ -193,7 +184,7 @@ export function App() {
   const memoChain = useRef(new Map<string, Promise<void>>());
   const enqueueMemoUpdate = useCallback(
     (sid: string, question: string, answer: string) => {
-      if (!question.trim() || !answer.trim()) return;
+      if (!answer.trim()) return;
       const prev = memoChain.current.get(sid) ?? Promise.resolve();
       const next = prev
         .then(async () => {
@@ -240,6 +231,7 @@ export function App() {
         id: requestId,
         kind: mode,
         label: text ?? (mode === 'continuous' ? tRef.current.app.latestRemark : ''),
+        question: text ?? '',
         text: '',
         status: 'streaming',
       });
@@ -278,7 +270,7 @@ export function App() {
         const label = question ?? tRef.current.app.latestRemark;
         patchSession(sid, (s) => ({
           ...s,
-          turns: s.turns.map((t) => (t.id === requestId ? { ...t, label } : t)),
+          turns: s.turns.map((t) => (t.id === requestId ? { ...t, label, question: question ?? '' } : t)),
         }));
       }
       const material = mode === 'translate' ? {} : currentMaterial();
@@ -290,6 +282,17 @@ export function App() {
           : (shotQueuesRef.current[sid] ?? [])
               .filter((it) => it.status === 'ready' && it.text)
               .map((it) => it.text!);
+      // Earlier turns, last HISTORY_TURNS of each kind. Interview turns (答/持续)
+      // only while the mic is off: with it on, the <interviewee> lines already
+      // hold what I said. Typed 问 / 截图 turns are a side chat with the AI and
+      // reach only the next 问.
+      const done = (sessionsRef.current.find((x) => x.id === sid)?.turns ?? []).filter((t) => t.status === 'done');
+      const pairs = (kinds: AnswerTurn['kind'][]) =>
+        done
+          .filter((t) => kinds.includes(t.kind))
+          .slice(-HISTORY_TURNS)
+          .map((t) => ({ question: t.question ?? t.label, answer: t.text }));
+      const earlierAnswers = micRef.current?.running ? [] : pairs(['segment', 'continuous']);
       const payload: LlmAskPayload = {
         requestId,
         sessionId: sid,
@@ -297,13 +300,14 @@ export function App() {
         question: mode === 'free' ? undefined : question,
         freeQuestion: mode === 'free' ? text : undefined,
         transcript: recentSegs.map((s) => ({ id: s.id, speaker: s.speaker ?? 'them', text: s.text })),
-        history: mode === 'translate' ? undefined : buildHistory(),
+        earlierAnswers: mode === 'translate' ? undefined : earlierAnswers,
+        chatHistory: mode === 'free' ? pairs(['free', 'vision']) : undefined,
         visualContext: visualContext?.length ? visualContext : undefined,
         ...material,
       };
       window.mc.llmAsk(payload);
     },
-    [appendTurn, buildHistory, currentMaterial, maybeTitle, patchSession],
+    [appendTurn, currentMaterial, maybeTitle, patchSession],
   );
 
   const askShot = useCallback(
@@ -315,6 +319,7 @@ export function App() {
         id: requestId,
         kind: 'vision',
         label: question || tRef.current.app.readShot,
+        question,
         text: '',
         status: 'streaming',
       });
@@ -429,7 +434,7 @@ export function App() {
                     endTs: ev.timings.speechEndTs,
                     e2eMs,
                     inferMs,
-                  }),
+                  }, { ...DEFAULT_APPEND_OPTIONS, closedUntil: answeredRef.current[sid] }),
                 }
               : s,
           ),
@@ -456,13 +461,13 @@ export function App() {
           }),
         })),
       );
-      // fold finished ANSWER turns into the session memo (async, off-path);
-      // translate/vision turns are not interview Q&A
+      // fold finished answer turns into the session memo (async, off-path)
       if (ev.kind === 'done') {
         const s = sessionsRef.current.find((x) => x.turns.some((t) => t.id === ev.requestId));
         const t = s?.turns.find((x) => x.id === ev.requestId);
-        if (s && t && (t.kind === 'segment' || t.kind === 'continuous' || t.kind === 'free')) {
-          enqueueMemoUpdate(s.id, t.label, ev.text || t.text);
+        // only interview turns: a typed 问 question is a side chat with the AI
+        if (s && t && (t.kind === 'segment' || t.kind === 'continuous')) {
+          enqueueMemoUpdate(s.id, t.question ?? t.label, ev.text || t.text);
         }
       }
     });
@@ -597,7 +602,7 @@ export function App() {
     }
   }, []);
 
-  // 🎤 独立麦克风采集：只转麦克风(我)，与系统声音互不影响，按钮直接控制起停
+  // 独立麦克风采集：只转麦克风(我)，与系统声音互不影响，按钮直接控制起停
   const toggleMicCapture = useCallback(async () => {
     const mic = micRef.current!;
     if (mic.running) {
@@ -610,7 +615,10 @@ export function App() {
       setMicActive(true);
       if (mics.length === 0) void listMics().then(setMics);
     } catch (e) {
-      setAsr((s) => ({ ...s, lastError: tRef.current.app.micStartFail((e as Error).message) }));
+      // the name tells the cause (NotAllowedError: Windows privacy switch;
+      // NotReadableError: another app holds the device); the message can be empty
+      const err = e as Error;
+      setAsr((s) => ({ ...s, lastError: tRef.current.app.micStartFail(`${err.name}: ${err.message}`) }));
     }
   }, [settings, mics]);
 
@@ -1013,7 +1021,7 @@ export function App() {
         </div>
         <div className="titlebar-window-controls">
           <button className="btn" onClick={() => setShowSettings((v) => !v)} title={t.titlebar.settingsTitle}>
-            ⚙
+            {t.titlebar.settingsTitle}
           </button>
           <button className="btn" onClick={() => window.mc.hide()} title={t.titlebar.hideTitle}>
             —

@@ -67,7 +67,30 @@ describe('syncPromptLogSession', () => {
 });
 
 describe('formatPromptLogRequest / Response / Error', () => {
+  it('writes a system message in full once, then as a reference to that request', () => {
+    clearPromptLogState();
+    const req = (requestId: string, system: string) =>
+      formatPromptLogRequest({
+        at: '2026-09-24T00:00:00.000Z',
+        sessionId: 's1',
+        requestId,
+        mode: 'continuous',
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: 'question' },
+        ],
+        newLineCount: 0,
+        carriedOverCount: 0,
+      });
+    expect(req('req-1', 'tech prompt')).toContain('[system]\ntech prompt');
+    const second = req('req-2', 'tech prompt');
+    expect(second).toContain('[system] same as REQUEST req-1');
+    expect(second).not.toContain('tech prompt');
+    expect(req('req-3', 'hr prompt')).toContain('[system]\nhr prompt');
+  });
+
   it('renders a request with the new/carried-over transcript note and messages', () => {
+    clearPromptLogState();
     const out = formatPromptLogRequest({
       at: '2026-09-24T00:00:00.000Z',
       sessionId: 's1',

@@ -37,7 +37,7 @@ export function StatusBar({
         )}
         {asr.lastError && (
           <span className="tag tag-err" title={asr.lastError}>
-            ⚠
+            !
           </span>
         )}
         {/* compact service health; the panel behind it carries the detail */}

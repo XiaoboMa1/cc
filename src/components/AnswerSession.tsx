@@ -8,6 +8,8 @@ export interface AnswerTurn {
   id: string;
   kind: TurnKind;
   label: string;
+  /** the question sent to the model; '' when there was none */
+  question?: string;
   text: string;
   status: 'streaming' | 'done' | 'error';
   error?: string;
@@ -37,7 +39,7 @@ export interface AnswerSessionHandle {
 /**
  * 智能体 conversation panel (R4) with a multi-session bar. Answers ACCUMULATE
  * as a scrolling session (never replaced); each meeting is its own session
- * with its own knowledge base. The 📷 screenshot button only appears in
+ * with its own knowledge base. The screenshot button only appears in
  * multimodal mode (it needs a vision model).
  */
 export function AnswerSession({
@@ -167,14 +169,14 @@ export function AnswerSession({
           }}
           title={t.answer.renameTitle}
         >
-          ✎
+          {t.answer.rename}
         </button>
         <div className="session-crud">
           <button className="btn btn-sm" onClick={onNew} title={t.answer.newTitle}>
             ＋
           </button>
           <button className="btn btn-sm" onClick={() => onDelete(currentId)} title={t.answer.deleteTitle}>
-            🗑
+            {t.answer.del}
           </button>
         </div>
         <div className="session-kb-tags">
@@ -187,7 +189,7 @@ export function AnswerSession({
                 : t.answer.resumeEmptyTitle
             }
           >
-            📄{resumeChars > 0 ? resumeName ?? t.answer.resume : t.answer.resume}
+            {resumeChars > 0 ? resumeName ?? t.answer.resume : t.answer.resume}
           </button>
           {resumeChars > 0 && (
             <button className="btn btn-sm" onClick={() => onClearKb('resume')} title={t.answer.resumeRemoveTitle}>
@@ -199,7 +201,7 @@ export function AnswerSession({
             onClick={() => onPickKb('jd')}
             title={jdChars > 0 ? t.answer.jdSetTitle(jdName ?? '', jdChars) : t.answer.jdEmptyTitle}
           >
-            📋{jdChars > 0 ? jdName ?? t.answer.jd : t.answer.jd}
+            {jdChars > 0 ? jdName ?? t.answer.jd : t.answer.jd}
           </button>
           {jdChars > 0 && (
             <button className="btn btn-sm" onClick={() => onClearKb('jd')} title={t.answer.jdRemoveTitle}>
@@ -319,7 +321,7 @@ export function AnswerSession({
               onShotAsk(q, img);
             }}
           >
-            📷
+            {t.answer.shot}
           </button>
         )}
       </div>

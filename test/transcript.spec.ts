@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_APPEND_OPTIONS,
   appendSegment,
   joinTexts,
   nextSegmentId,
@@ -38,6 +39,16 @@ describe('nextSegmentId / reindexSegments', () => {
 });
 
 describe('appendSegment', () => {
+  it('starts a new bubble instead of growing one an answer already covered', () => {
+    const list = [seg(1, "I'm listening.", 0, 1000)];
+    expect(appendSegment(list, seg(2, 'That is the outcome.', 1500, 2500))).toHaveLength(1);
+    const next = appendSegment(list, seg(2, 'That is the outcome.', 1500, 2500), {
+      ...DEFAULT_APPEND_OPTIONS,
+      closedUntil: 1200,
+    });
+    expect(next.map((s) => s.text)).toEqual(["I'm listening.", 'That is the outcome.']);
+  });
+
   it('never merges into a translated or translating bubble', () => {
     const translated: TranscriptSegment = { ...seg(1, 'How can we live', 0, 1000), translation: '我们如何生活' };
     let list = appendSegment([translated], seg(2, 'more meaningfully', 1500, 2500));

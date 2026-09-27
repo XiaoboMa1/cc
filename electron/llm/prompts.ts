@@ -3,15 +3,15 @@
  * Every prompt is English and every answer is English, except
  * buildTranslateMessages, whose job is a Chinese translation.
  *
- * ai-ans (segment / continuous) — cache-friendly three-layer layout:
- *   stable prefix = PROMPT_HR | PROMPT_TECH + <resume> + <job_description>
- *                   (BYTE-STABLE per interview type + material → DeepSeek prefix cache)
- *   slow state    = <interview_memo> (refreshed after each answer)
- *   fast context  = history turns, then <visual_context> <conversation> <question>
+ * ai-ans (segment / continuous) = two messages:
+ *   system = PROMPT_HR | PROMPT_TECH + <resume> + <job_description>
+ *            (BYTE-STABLE per interview type + material → DeepSeek prefix cache)
+ *   user   = <interview_memo> <visual_context> <interview_conversation>
+ *            <earlier_answers> <question>, then the instruction
  * A block with nothing in it is left out entirely.
  */
 import type { ChatMessage } from './adapter';
-import type { InterviewType, TranscriptLine } from '../../shared/protocol';
+import type { InterviewType, QaPair, TranscriptLine } from '../../shared/protocol';
 
 /** transcript chars per request, newest lines kept; sized so a few spoken
  * answers of 240-400+ words still fit next to the interviewer's lines */
@@ -22,7 +22,7 @@ export const MAX_CONTEXT_CHARS = 6000;
 /** how every answer must sound, for both interview types (anti-AI-wording rules) */
 const STYLE = `<style>
 Every sentence has to carry something only I could say. Before each sentence, run two checks:
-1. Where does it come from? My own work in <resume>, what was said in <conversation> and what is on screen in <visual_context> count. The job description, the question itself and general knowledge of the field do not: use them only as the premise of a conclusion drawn from my own work, in the same sentence as that conclusion.
+1. Where does it come from? My own work in <resume>, what was said in <interview_conversation> or <earlier_answers> and what is on screen in <visual_context> count. The job description, the question itself and general knowledge of the field do not: use them only as the premise of a conclusion drawn from my own work, in the same sentence as that conclusion.
 2. Who else could say it? If another candidate could say it unchanged about another company and another system, replace it with the specific instance: which system, how many users or requests, what broke, what I changed, what the number was afterwards.
 
 Never write:
@@ -43,10 +43,11 @@ Apply these while writing and never mention them.
 
 /** what each tag in the request holds, for both interview types */
 const INPUT_FORMAT = `<input_format>
-- <conversation>: the live transcript, oldest first. <interviewer> is the interviewer's audio; <interviewee> is my microphone, so it is what I actually said.
+- <interview_memo>: notes on the interview so far: the questions asked, the facts I have claimed, what the interviewer cares about. Stay consistent with it.
 - <visual_context>: text extracted from screenshots I took, in capture order.
-- <question>: what the interviewer has said since your previous answer. This is what you answer.
-- <interview_memo> and your earlier replies in this chat: what has been said so far. Stay consistent with both.
+- <interview_conversation>: the live transcript of the interview, oldest first. <interviewer> is the interviewer's audio; <interviewee> is my microphone, so it is what I actually said.
+- <earlier_answers>: only when my microphone is off, so <interview_conversation> holds no <interviewee> lines. Each <turn> is an earlier interviewer question (<asked>) and the answer you gave me (<answer>), which I said. Stay consistent with them.
+- <question>: what the interviewer has said since your previous answer. This is what you answer; the earlier questions in <interview_conversation> have been answered already.
 </input_format>`;
 
 /** interview type 'hr': behavioral, motivation, CV deep dive */
@@ -61,7 +62,7 @@ You are my teleprompter in a live behavioral interview: motivation, past experie
 - The first sentence answers the question directly. Then the story.
 - Experience questions: the situation, my task, the actions I took, the result with its number. Most of the words go to the actions.
 - Motivation questions ("why this role", "why us", "why are you leaving"): tie a specific item in <job_description> to a specific piece of my work in <resume>.
-- Use only facts from <resume> and from what I have already said in <conversation>. Never invent a company, project, number or date.
+- Use only facts from <resume> and from what I have already said in the interview. Never invent a company, project, number or date.
 - End a full answer with the outcome, then one sentence naming a task from <job_description> and what I would do in it. A short follow-up just stops.
 - If the question is unclear or I have no matching experience, give the closest real example, or one natural line that buys a moment to think.
 </answer_rules>`,
@@ -181,11 +182,11 @@ export function buildMemoUpdateMessages(oldMemo: string, question: string, answe
 <cautions>
 (points I answered shakily or need to come back to)
 </cautions>
-Merge duplicates. When over length, drop the oldest asked questions first. Output the notes only, with no explanation.`,
+Write the notes in English, even where the current notes or the exchange are in another language. Merge duplicates. When over length, drop the oldest asked questions first. Output the notes only, with no explanation.`,
     },
     {
       role: 'user',
-      content: `<current_notes>\n${oldMemo.trim() || 'empty'}\n</current_notes>\n\n<new_exchange>\n<question>\n${question.trim()}\n</question>\n<answer>\n${answer.trim()}\n</answer>\n</new_exchange>`,
+      content: `<current_notes>\n${oldMemo.trim() || 'empty'}\n</current_notes>\n\n<new_exchange>\n<question>\n${question.trim() || 'none: answered from the screenshots'}\n</question>\n<answer>\n${answer.trim()}\n</answer>\n</new_exchange>`,
     },
   ];
 }
@@ -214,15 +215,18 @@ export interface AnswerPromptInput {
   freeQuestion?: string;
   /** selects PROMPT_HR / PROMPT_TECH (segment/continuous); default 'tech' */
   interviewType?: InterviewType;
-  /** prior Q&A turns for a coherent session (oldest first) */
-  history?: ChatMessage[];
+  /** earlier 答/持续 turns, oldest first; the renderer sends them only while
+   * the mic is off (with it on, <interviewee> lines hold what I said) */
+  earlierAnswers?: QaPair[];
+  /** earlier 问 / 截图 turns, oldest first — mode 'free' only, as chat turns */
+  chatHistory?: QaPair[];
   /** resume slot (双槽资料); falls back to `background` */
   resume?: string;
   /** job-description slot (双槽资料) */
   jd?: string;
   /** legacy single-slot KB / global default — treated as resume material */
   background?: string;
-  /** rolling interview memo (P1) — slow-changing block, its own message */
+  /** rolling interview memo (P1), segment/continuous only */
   memo?: string;
   /** R6: cached extracted text (E) from every screenshot currently queued,
    * oldest first — segment/continuous only, folded in as <visual_context> */
@@ -245,7 +249,7 @@ export function clampTranscript(
   return out;
 }
 
-/** <conversation> with consecutive lines of one speaker in one element; '' when empty */
+/** <interview_conversation> with consecutive lines of one speaker in one element; '' when empty */
 function conversationXml(lines: readonly TranscriptLine[]): string {
   const groups: { speaker: TranscriptLine['speaker']; texts: string[] }[] = [];
   for (const line of lines) {
@@ -260,7 +264,7 @@ function conversationXml(lines: readonly TranscriptLine[]): string {
     const tag = g.speaker === 'me' ? 'interviewee' : 'interviewer';
     return `<${tag}>\n${g.texts.join('\n')}\n</${tag}>`;
   });
-  return `<conversation>\n${body.join('\n')}\n</conversation>`;
+  return `<interview_conversation>\n${body.join('\n')}\n</interview_conversation>`;
 }
 
 /**
@@ -316,6 +320,7 @@ export function buildExtractionMessages(imageDataUrl: string): ChatMessage[] {
   const sys = [
     'You extract information from a screenshot. Extract only: do not answer, solve or comment.',
     '- Text (a problem statement, code, a document, a chat): copy the legible key text word for word, keeping every number, constraint and example exact.',
+    '- Write in English: translate text that is in another language; code, identifiers and numbers stay exactly as shown.',
     '- A chart, UI or diagram: one or two sentences on what it shows.',
     '- Anything blurry or cut off: say it is unreadable; do not guess.',
     'Output the extracted content only, with no preamble such as "This screenshot shows".',
@@ -340,6 +345,12 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   const conversation = conversationXml(clampTranscript(input.transcript));
   const resume = (input.resume ?? '').trim() || (input.background ?? '').trim();
   const jd = (input.jd ?? '').trim();
+  // <asked> is left out for an answer given from the screenshots alone
+  const earlier = (input.earlierAnswers ?? []).map(
+    (p) =>
+      `<turn>\n${p.question.trim() ? `<asked>\n${p.question.trim()}\n</asked>\n` : ''}<answer>\n${p.answer.trim()}\n</answer>\n</turn>`,
+  );
+  const earlierAnswers = earlier.length ? `<earlier_answers>\n${earlier.join('\n')}\n</earlier_answers>` : '';
 
   // Free "随便问": raw pass-through — NO teleprompter prompt, so identity
   // / "which model are you" questions get the model's truthful answer. The
@@ -349,52 +360,41 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
     if (resume) refs.push(`<resume>\n${resume.slice(0, MAX_BACKGROUND_CHARS)}\n</resume>`);
     if (jd) refs.push(`<job_description>\n${jd.slice(0, MAX_BACKGROUND_CHARS)}\n</job_description>`);
     if (conversation) refs.push(conversation);
+    if (earlierAnswers) refs.push(earlierAnswers);
     const msgs: ChatMessage[] = [];
     if (refs.length) {
       msgs.push({ role: 'system', content: `Reference material. Use it only if my question needs it.\n\n${refs.join('\n\n')}` });
     }
-    msgs.push(...(input.history ?? []));
+    // my earlier typed questions to you, as chat turns
+    for (const p of input.chatHistory ?? []) {
+      msgs.push({ role: 'user', content: p.question.trim() }, { role: 'assistant', content: p.answer.trim() });
+    }
     msgs.push({ role: 'user', content: (input.freeQuestion ?? '').trim() });
     return msgs;
   }
 
-  // segment / continuous: teleprompter with the stable prefix
-  const msgs: ChatMessage[] = [
-    { role: 'system', content: buildStablePrefix(input.interviewType ?? 'tech', resume, jd) },
-  ];
-
-  const memo = (input.memo ?? '').trim();
-  if (memo) {
-    // slow-changing block sits BETWEEN the stable prefix and the fast history,
-    // so a memo refresh only invalidates the cache from this point on
-    msgs.push({ role: 'user', content: `<interview_memo>\n${memo}\n</interview_memo>` });
-    msgs.push({ role: 'assistant', content: "Noted. I'll stay consistent with it." });
-  }
-
-  // earlier turns: the user side is the question that answer was given for
-  for (const m of input.history ?? []) {
-    msgs.push(
-      m.role === 'user' && typeof m.content === 'string'
-        ? { role: 'user', content: `<question>\n${m.content.trim()}\n</question>` }
-        : m,
-    );
-  }
-
+  // segment / continuous: the stable prefix, then everything else as one
+  // user message of tagged blocks
   const blocks: string[] = [];
+  const memo = (input.memo ?? '').trim();
+  if (memo) blocks.push(`<interview_memo>\n${memo}\n</interview_memo>`);
   const visual = (input.visualContext ?? []).map((e) => e.trim()).filter(Boolean);
   if (visual.length) {
     const shots = visual.map((e, i) => `<screenshot index="${i + 1}">\n${e}\n</screenshot>`);
     blocks.push(`<visual_context>\n${shots.join('\n')}\n</visual_context>`);
   }
   if (conversation) blocks.push(conversation);
+  if (earlierAnswers) blocks.push(earlierAnswers);
   const q = (input.question ?? '').trim();
   if (q) {
     blocks.push(`<question>\n${q}\n</question>`, 'Answer the <question> now, in the words I will say.');
   } else {
     blocks.push(
-      'No question has been asked aloud yet: answer from <visual_context> and <conversation> now, in the words I will say.',
+      'No question has been asked aloud yet: answer from <visual_context> and <interview_conversation> now, in the words I will say.',
     );
   }
-  msgs.push({ role: 'user', content: blocks.join('\n\n') });
-  return msgs;
+  return [
+    { role: 'system', content: buildStablePrefix(input.interviewType ?? 'tech', resume, jd) },
+    { role: 'user', content: blocks.join('\n\n') },
+  ];
 }
