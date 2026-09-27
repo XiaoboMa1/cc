@@ -118,7 +118,8 @@ export async function chatOnce(
       model: config.model,
       messages,
       stream: false,
-      temperature: opts?.temperature ?? 0.5,
+      // Claude rejects `temperature` (400 "`temperature` is deprecated for this model")
+      ...(/claude/i.test(config.model) ? {} : { temperature: opts?.temperature ?? 0.5 }),
       ...(opts?.maxTokens ? { max_tokens: opts.maxTokens } : {}),
     }),
     signal: opts?.signal,
@@ -155,7 +156,7 @@ export async function chatStream(
       model: config.model,
       messages,
       stream: true,
-      temperature: 0.5,
+      ...(/claude/i.test(config.model) ? {} : { temperature: 0.5 }),
     }),
     signal,
   });

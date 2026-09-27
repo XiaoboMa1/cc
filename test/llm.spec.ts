@@ -609,6 +609,16 @@ describe('chatStream (mock OpenAI-compatible server)', () => {
     expect(lastReq.body.temperature).toBe(0.2);
   });
 
+  it('never sends temperature to a Claude model', async () => {
+    const claude = { ...cfg(), model: 'claude-opus-5-5' };
+    behavior = 'json';
+    await chatOnce(claude, msgs, { maxTokens: 1, temperature: 0 });
+    expect(lastReq.body).not.toHaveProperty('temperature');
+    behavior = 'stream';
+    await chatStream(claude, msgs, { onDelta: () => {} });
+    expect(lastReq.body).not.toHaveProperty('temperature');
+  });
+
   it('supports aborting mid-stream', async () => {
     behavior = 'slow';
     const ac = new AbortController();
