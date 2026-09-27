@@ -1,511 +1,59 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  AsrEvent,
-  InterviewType,
-  KbSlot,
-  LlmAskPayload,
-  PublicSettings,
-  StoredSession,
-} from '../shared/protocol';
-import {
-  DEFAULT_APPEND_OPTIONS,
-  appendSegment,
-  nextSegmentId,
-  percentile,
-  reindexSegments,
-  type TranscriptSegment,
-} from '../shared/transcript';
-import { isLikelyQuestion } from '../shared/textHeuristics';
-import { captureKindForPlatform } from '../shared/platform';
+import type { PublicSettings } from '../shared/protocol';
 import { deriveServiceHealth } from '../shared/healthState';
-import { LoopbackCapture } from './audio/loopbackCapture';
-import { MicCapture, listMics } from './audio/micCapture';
-import { TranscriptPanel } from './components/TranscriptPanel';
-import { SettingsPanel } from './components/SettingsPanel';
-import { ServiceHealthPanel } from './components/ServiceHealthPanel';
+import { AnswerSession, type AnswerSessionHandle } from './components/AnswerSession';
 import { DiagnosticsPanel } from './components/DiagnosticsPanel';
 import { HelpPanel } from './components/HelpPanel';
+import { ServiceHealthPanel } from './components/ServiceHealthPanel';
+import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
-import {
-  AnswerSession,
-  type AnswerSessionHandle,
-  type AnswerTurn,
-  type ShotQueueItem,
-} from './components/AnswerSession';
+import { TitleBar } from './components/TitleBar';
+import { TranscriptPanel } from './components/TranscriptPanel';
+import { useAnswering } from './hooks/useAnswering';
+import { useAsrStream } from './hooks/useAsrStream';
+import { useAudioCapture } from './hooks/useAudioCapture';
+import { useSessions } from './hooks/useSessions';
+import { useShotQueue } from './hooks/useShotQueue';
 import { I18nProvider, getDict, type Dict } from './i18n';
 
-export interface AsrUiState {
-  phase: 'loading' | 'ready' | 'error';
-  ep?: string;
-  gpuSuspect?: boolean;
-  workerState: 'loading' | 'listening' | 'speech' | 'transcribing' | 'stopped';
-  lastError?: string;
-}
-
-export interface HudStats {
-  lastE2eMs?: number;
-  lastInferMs?: number;
-  p50?: number;
-  p95?: number;
-  count: number;
-}
-
-const MAX_TURNS = 200;
-// v2: only the last 8 turns ride along verbatim — the rolling memo carries
-// older context, keeping per-request tokens flat as the interview runs long
-const HISTORY_TURNS = 8;
-/** an answer waits at most this long for the interviewer sentence ASR is still finalizing */
-const PARTIAL_WAIT_MS = 3000;
-/** … and at most this long for queued screenshots still being extracted */
-const EXTRACT_WAIT_MS = 30000;
-
-let seq = 0;
-const uid = (p: string) => `${p}-${++seq}-${Date.now()}`;
-
-function newSession(name: string, interviewType: InterviewType = 'tech'): StoredSession {
-  return { id: uid('s'), name, createdAt: Date.now(), turns: [], segments: [], interviewType };
-}
-
-/** legacy single-slot KB → resume slot (dual-slot material, P0-2) */
-function migrateKbSlots(s: StoredSession, fallbackName: string): StoredSession {
-  if (!s.kbText || s.resumeText) return s;
-  const { kbName, kbText, ...rest } = s;
-  return { ...rest, resumeName: kbName ?? fallbackName, resumeText: kbText };
-}
-
-/** first-question topic → a short session title */
-function deriveName(text: string, fallback: string): string {
-  const t = text.replace(/\s+/g, ' ').trim();
-  if (!t) return fallback;
-  return t.length > 14 ? t.slice(0, 14) + '…' : t;
-}
+/** the overlay panels are mutually exclusive: one at a time, never stacked */
+type Panel = 'settings' | 'health' | 'diagnostics' | 'help' | null;
 
 export function App() {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
-  const [asr, setAsr] = useState<AsrUiState>({ phase: 'loading', workerState: 'loading' });
-  const [capturing, setCapturing] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showHealth, setShowHealth] = useState(false);
-  const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
+  const [panel, setPanel] = useState<Panel>(null);
   const [showHud, setShowHud] = useState(true);
-  const [hud, setHud] = useState<HudStats>({ count: 0 });
-  const [continuous, setContinuous] = useState(false);
-  const [mics, setMics] = useState<{ deviceId: string; label: string }[]>([]);
-  const [micActive, setMicActive] = useState(false);
-  const [partials, setPartials] = useState<{ them?: string; me?: string }>({});
-  const [sessions, setSessions] = useState<StoredSession[]>([]);
-  const [currentId, setCurrentId] = useState<string>('');
-  const [kbNotice, setKbNotice] = useState<string | null>(null);
-  // R6: per-session queued screenshots (Ctrl+H/L/R) — in-memory only, never
-  // persisted with the session (images can't outlast the running app)
-  const [shotQueues, setShotQueues] = useState<Record<string, ShotQueueItem[]>>({});
-
-  const loopbackRef = useRef<LoopbackCapture | null>(null);
-  const themInputRef = useRef<MicCapture | null>(null);
-  const micRef = useRef<MicCapture | null>(null);
-  const settingsRef = useRef<PublicSettings | null>(null);
-  const e2eSamples = useRef<number[]>([]);
-  const sessionsRef = useRef<StoredSession[]>([]);
-  const currentIdRef = useRef<string>('');
-  const shotQueuesRef = useRef<Record<string, ShotQueueItem[]>>({});
-  const partialsRef = useRef<{ them?: string; me?: string }>({});
-  // per session: interviewer lines that ended at or before this Date.now() are
-  // already put to a continuous answer (K-A or the answer hotkey). A ref, not
-  // session state: both triggers can fire before React re-renders.
-  const answeredRef = useRef<Record<string, number>>({});
-  const captureBusyRef = useRef(false);
   const answerRef = useRef<AnswerSessionHandle>(null);
-  const loaded = useRef(false);
 
   // UI language: settings-driven; ref mirror so stable callbacks stay fresh
   const t = getDict(settings?.ui.lang);
   const tRef = useRef<Dict>(t);
   tRef.current = t;
 
-  if (!loopbackRef.current) loopbackRef.current = new LoopbackCapture();
-  if (!themInputRef.current) themInputRef.current = new MicCapture();
-  if (!micRef.current) micRef.current = new MicCapture();
-  settingsRef.current = settings;
-  sessionsRef.current = sessions;
-  currentIdRef.current = currentId;
-  shotQueuesRef.current = shotQueues;
-  partialsRef.current = partials;
+  const sessions = useSessions(tRef);
+  const stream = useAsrStream(sessions.appendSegment);
+  const shots = useShotQueue(sessions.currentIdRef);
+  const capture = useAudioCapture({
+    settings,
+    onSettings: setSettings,
+    reportError: stream.reportError,
+    prewarm: sessions.prewarm,
+    tRef,
+  });
+  const answering = useAnswering({ sessions, shots, partialsRef: stream.partialsRef, mic: capture.mic, tRef });
+  const { current, currentIdRef, createSession, clearAnswers, clearTranscript } = sessions;
+  const { captureShot, undoLastShot, clearShotQueue } = shots;
+  const { askLlm } = answering;
+  const { asr } = stream;
+  const { capturing, startCapture, stopCapture } = capture;
 
-  const current = useMemo(
-    () => sessions.find((s) => s.id === currentId) ?? null,
-    [sessions, currentId],
-  );
-  const segments = current?.segments ?? [];
-  const currentShotQueue = shotQueues[currentId] ?? [];
-
-  const patchSession = useCallback((id: string, fn: (s: StoredSession) => StoredSession) => {
-    setSessions((list) => list.map((s) => (s.id === id ? fn(s) : s)));
-  }, []);
-
-  const appendTurn = useCallback(
-    (sessionId: string, turn: AnswerTurn) => {
-      patchSession(sessionId, (s) => {
-        const turns = [...s.turns, turn];
-        return { ...s, turns: turns.length > MAX_TURNS ? turns.slice(turns.length - MAX_TURNS) : turns };
-      });
-    },
-    [patchSession],
-  );
-
-  /** current session's prompt inputs: interview type + dual-slot material
-   * (resume / JD / rolling memo) */
-  const currentMaterial = useCallback((): {
-    interviewType: InterviewType;
-    resume?: string;
-    jd?: string;
-    memo?: string;
-  } => {
-    const s = sessionsRef.current.find((x) => x.id === currentIdRef.current);
-    return {
-      interviewType: s?.interviewType ?? 'tech',
-      resume: s?.resumeText || undefined,
-      jd: s?.jdText || undefined,
-      memo: s?.memo || undefined,
-    };
-  }, []);
-
-  /** P1-6: ask main to warm the DeepSeek prefix cache for the current material */
-  const prewarm = useCallback(
-    (immediate: boolean) => {
-      const m = currentMaterial();
-      window.mc.prewarm({ resume: m.resume, jd: m.jd, interviewType: m.interviewType, immediate });
-    },
-    [currentMaterial],
-  );
-
-  // P1-5: rolling memo — fold each finished Q&A in asynchronously, one update
-  // at a time per session (promise chain), never on the answer critical path
-  const memoChain = useRef(new Map<string, Promise<void>>());
-  const enqueueMemoUpdate = useCallback(
-    (sid: string, question: string, answer: string) => {
-      if (!answer.trim()) return;
-      const prev = memoChain.current.get(sid) ?? Promise.resolve();
-      const next = prev
-        .then(async () => {
-          const old = sessionsRef.current.find((x) => x.id === sid)?.memo ?? '';
-          const memo = await window.mc.memoUpdate({ memo: old, question, answer });
-          if (memo) patchSession(sid, (s) => ({ ...s, memo }));
-        })
-        .catch(() => {});
-      memoChain.current.set(sid, next);
-    },
-    [patchSession],
-  );
-
-  /** auto-name a session from its first real question (once) */
-  const maybeTitle = useCallback(
-    (sid: string, text?: string) => {
-      if (!text?.trim()) return;
-      patchSession(sid, (s) =>
-        s.titled ? s : { ...s, name: deriveName(text, tRef.current.app.newSession), titled: true },
-      );
-    },
-    [patchSession],
-  );
-
-  const askLlm = useCallback(
-    async (mode: 'segment' | 'continuous' | 'free' | 'translate', text?: string) => {
-      const sid = currentIdRef.current;
-      if (!sid) return;
-      const askedAt = Date.now();
-      const answeredTs = answeredRef.current[sid] ?? 0;
-      if (mode === 'continuous') {
-        // nothing arrived since the previous continuous answer — the other
-        // trigger got here first, or the hotkey was pressed twice: no repeat
-        const segsNow = sessionsRef.current.find((x) => x.id === sid)?.segments ?? [];
-        const anyNew =
-          segsNow.some((g) => (g.speaker ?? 'them') === 'them' && g.endTs > answeredTs) ||
-          !!partialsRef.current.them ||
-          (shotQueuesRef.current[sid] ?? []).some((it) => it.at > answeredTs);
-        if (!anyNew) return;
-        answeredRef.current[sid] = askedAt;
-      }
-      const requestId = uid('req');
-      appendTurn(sid, {
-        id: requestId,
-        kind: mode,
-        label: text ?? (mode === 'continuous' ? tRef.current.app.latestRemark : ''),
-        question: text ?? '',
-        text: '',
-        status: 'streaming',
-      });
-      if (mode === 'segment' || mode === 'free') maybeTitle(sid, text);
-
-      // Wait for input the user has already given: the interviewer sentence
-      // ASR is still finalizing (a partial turns into a segment ~1 s after
-      // speech ends) and screenshots still being extracted. Sending at once
-      // would leave out the question just asked / the screenshot just taken.
-      if (mode === 'segment' || mode === 'continuous') {
-        const pending = () =>
-          (mode === 'continuous' && !!partialsRef.current.them && Date.now() - askedAt < PARTIAL_WAIT_MS) ||
-          ((shotQueuesRef.current[sid] ?? []).some((it) => it.status === 'extracting') &&
-            Date.now() - askedAt < EXTRACT_WAIT_MS);
-        if (pending()) {
-          while (pending()) await new Promise((r) => setTimeout(r, 150));
-          // stopped or cleared while waiting
-          const turn = sessionsRef.current.find((x) => x.id === sid)?.turns.find((x) => x.id === requestId);
-          if (turn?.status !== 'streaming') return;
-        }
-      }
-
-      const segs = sessionsRef.current.find((x) => x.id === sid)?.segments ?? [];
-      const recentSegs = segs.slice(-30);
-      let question = text;
-      if (mode === 'continuous') {
-        // continuous (auto trigger or the answer hotkey): the question is every
-        // interviewer line since the previous continuous answer, so one asked
-        // over several sentences is answered as one — the turn label (and so
-        // the session history) carries it instead of a constant '对方最新发言'.
-        // Only new screenshots: the latest interviewer line again.
-        const theirs = recentSegs.filter((g) => (g.speaker ?? 'them') === 'them');
-        const fresh = theirs.filter((g) => g.endTs > answeredTs);
-        question = (fresh.length ? fresh : theirs.slice(-1)).map((g) => g.text).join('\n') || undefined;
-        answeredRef.current[sid] = Math.max(answeredRef.current[sid] ?? 0, ...fresh.map((g) => g.endTs));
-        const label = question ?? tRef.current.app.latestRemark;
-        patchSession(sid, (s) => ({
-          ...s,
-          turns: s.turns.map((t) => (t.id === requestId ? { ...t, label, question: question ?? '' } : t)),
-        }));
-      }
-      const material = mode === 'translate' ? {} : currentMaterial();
-      // R6: cached extraction (E) from every screenshot currently queued for
-      // this session — folded in as "visual context" (segment/continuous only)
-      const visualContext =
-        mode === 'translate'
-          ? undefined
-          : (shotQueuesRef.current[sid] ?? [])
-              .filter((it) => it.status === 'ready' && it.text)
-              .map((it) => it.text!);
-      // Earlier turns, last HISTORY_TURNS of each kind. Interview turns (答/持续)
-      // only while the mic is off: with it on, the <interviewee> lines already
-      // hold what I said. Typed 问 / 截图 turns are a side chat with the AI and
-      // reach only the next 问.
-      const done = (sessionsRef.current.find((x) => x.id === sid)?.turns ?? []).filter((t) => t.status === 'done');
-      const pairs = (kinds: AnswerTurn['kind'][]) =>
-        done
-          .filter((t) => kinds.includes(t.kind))
-          .slice(-HISTORY_TURNS)
-          .map((t) => ({ question: t.question ?? t.label, answer: t.text }));
-      const earlierAnswers = micRef.current?.running ? [] : pairs(['segment', 'continuous']);
-      const payload: LlmAskPayload = {
-        requestId,
-        sessionId: sid,
-        mode,
-        question: mode === 'free' ? undefined : question,
-        freeQuestion: mode === 'free' ? text : undefined,
-        transcript: recentSegs.map((s) => ({ id: s.id, speaker: s.speaker ?? 'them', text: s.text })),
-        earlierAnswers: mode === 'translate' ? undefined : earlierAnswers,
-        chatHistory: mode === 'free' ? pairs(['free', 'vision']) : undefined,
-        visualContext: visualContext?.length ? visualContext : undefined,
-        ...material,
-      };
-      window.mc.llmAsk(payload);
-    },
-    [appendTurn, currentMaterial, maybeTitle, patchSession],
-  );
-
-  const askShot = useCallback(
-    (question: string, imageDataUrl?: string) => {
-      const sid = currentIdRef.current;
-      if (!sid) return;
-      const requestId = uid('shot');
-      appendTurn(sid, {
-        id: requestId,
-        kind: 'vision',
-        label: question || tRef.current.app.readShot,
-        question,
-        text: '',
-        status: 'streaming',
-      });
-      maybeTitle(sid, question || tRef.current.app.shotQuestion);
-      const m = currentMaterial();
-      const background = [m.resume, m.jd].filter(Boolean).join('\n\n') || undefined;
-      window.mc.shotAsk({ requestId, question, background, imageDataUrl });
-    },
-    [appendTurn, currentMaterial, maybeTitle],
-  );
-
-  // ---- R6: queued visual-context screenshots (Ctrl+H capture / Ctrl+L undo
-  // / Ctrl+R clear) — distinct from askShot above, which asks immediately.
-  // Esc during the drag resolves pickRegion() with null BEFORE any of this
-  // runs, so a cancelled capture never reaches the queue or gets extracted. ----
-  const removeShotQueueItem = useCallback((sid: string, id: string) => {
-    const item = shotQueuesRef.current[sid]?.find((it) => it.id === id);
-    if (item?.status === 'extracting') window.mc.llmCancel(id);
-    setShotQueues((q) => ({ ...q, [sid]: (q[sid] ?? []).filter((it) => it.id !== id) }));
-  }, []);
-
-  const captureShot = useCallback(async () => {
-    const img = await window.mc.pickRegion();
-    if (!img) return; // Esc / too-small drag — cancelled, nothing to queue
-    const sid = currentIdRef.current;
-    if (!sid) return;
-    const id = uid('shot');
-    setShotQueues((q) => ({
-      ...q,
-      [sid]: [...(q[sid] ?? []), { id, dataUrl: img, status: 'extracting', at: Date.now() }],
-    }));
-    window.mc.shotExtract({ requestId: id, imageDataUrl: img });
-  }, []);
-
-  const undoLastShot = useCallback(() => {
-    const sid = currentIdRef.current;
-    const list = shotQueuesRef.current[sid] ?? [];
-    const last = list[list.length - 1];
-    if (last) removeShotQueueItem(sid, last.id);
-  }, [removeShotQueueItem]);
-
-  const clearShotQueue = useCallback((sid?: string) => {
-    const id = sid ?? currentIdRef.current;
-    for (const item of shotQueuesRef.current[id] ?? []) {
-      if (item.status === 'extracting') window.mc.llmCancel(item.id);
-    }
-    setShotQueues((q) => ({ ...q, [id]: [] }));
-  }, []);
-
-  // ---- boot: load settings + sessions ----
   useEffect(() => {
-    void window.mc.getSettings().then((s) => {
-      setSettings(s);
-    });
-    void window.mc.loadSessions().then((f) => {
-      if (f.sessions.length) {
-        // heal legacy duplicate segment ids (worker counter used to reset per
-        // engine rebuild — translations then landed on multiple bubbles)
-        setSessions(
-          f.sessions.map((s) =>
-            migrateKbSlots(
-              { ...s, segments: reindexSegments(s.segments ?? []) },
-              tRef.current.app.legacyKbName,
-            ),
-          ),
-        );
-        setCurrentId(f.currentId && f.sessions.some((s) => s.id === f.currentId) ? f.currentId : f.sessions[0].id);
-      } else {
-        const s = newSession(tRef.current.app.sessionN(1));
-        setSessions([s]);
-        setCurrentId(s.id);
-      }
-      loaded.current = true;
-    });
-
-    const handleAsrEvent = (ev: AsrEvent) => {
-      if (ev.kind === 'ready') {
-        setAsr((s) => ({ ...s, phase: 'ready', ep: ev.ep, gpuSuspect: ev.gpuSuspect, workerState: 'listening' }));
-      } else if (ev.kind === 'status') {
-        setAsr((s) => ({ ...s, workerState: ev.state }));
-      } else if (ev.kind === 'error') {
-        setAsr((s) => ({ ...s, phase: ev.fatal ? 'error' : s.phase, lastError: ev.message }));
-      } else if (ev.kind === 'partial') {
-        setPartials((p) => ({ ...p, [ev.speaker]: ev.text }));
-      } else if (ev.kind === 'segment') {
-        setPartials((p) => ({ ...p, [ev.speaker]: undefined })); // final replaces the live partial
-        const e2eMs = Date.now() - ev.timings.speechEndTs;
-        const inferMs = ev.timings.inferEndTs - ev.timings.inferStartTs;
-        e2eSamples.current.push(e2eMs);
-        if (e2eSamples.current.length > 200) e2eSamples.current.shift();
-        setHud({
-          lastE2eMs: e2eMs,
-          lastInferMs: inferMs,
-          p50: percentile(e2eSamples.current, 50),
-          p95: percentile(e2eSamples.current, 95),
-          count: e2eSamples.current.length,
-        });
-        const sid = currentIdRef.current;
-        setSessions((list) =>
-          list.map((s) =>
-            s.id === sid
-              ? {
-                  ...s,
-                  segments: appendSegment(s.segments ?? [], {
-                    // NOT ev.id: the worker counter resets per engine rebuild,
-                    // duplicating ids inside a persisted session
-                    id: nextSegmentId(s.segments ?? []),
-                    text: ev.text,
-                    lang: ev.lang,
-                    speaker: ev.speaker,
-                    startTs: ev.timings.speechStartTs,
-                    endTs: ev.timings.speechEndTs,
-                    e2eMs,
-                    inferMs,
-                  }, { ...DEFAULT_APPEND_OPTIONS, closedUntil: answeredRef.current[sid] }),
-                }
-              : s,
-          ),
-        );
-      }
-    };
-    const off = window.mc.onAsrEvent(handleAsrEvent);
-    // instant-ready cloud engines emit ready/status BEFORE this subscription
-    // exists — pull the last ones so the UI never sticks at "模型加载中"
-    void window.mc.asrReplay().then(({ ready, status }) => {
-      if (ready) handleAsrEvent(ready);
-      if (status) handleAsrEvent(status);
-    });
-
-    const offLlm = window.mc.onLlmEvent((ev) => {
-      setSessions((list) =>
-        list.map((s) => ({
-          ...s,
-          turns: s.turns.map((t) => {
-            if (t.id !== ev.requestId) return t;
-            if (ev.kind === 'delta') return { ...t, text: t.text + ev.text };
-            if (ev.kind === 'done') return { ...t, text: ev.text || t.text, status: 'done' };
-            return { ...t, status: 'error', error: ev.message };
-          }),
-        })),
-      );
-      // fold finished answer turns into the session memo (async, off-path)
-      if (ev.kind === 'done') {
-        const s = sessionsRef.current.find((x) => x.turns.some((t) => t.id === ev.requestId));
-        const t = s?.turns.find((x) => x.id === ev.requestId);
-        // only interview turns: a typed 问 question is a side chat with the AI
-        if (s && t && (t.kind === 'segment' || t.kind === 'continuous')) {
-          enqueueMemoUpdate(s.id, t.question ?? t.label, ev.text || t.text);
-        }
-      }
-    });
-
-    const offShotExtract = window.mc.onShotExtractEvent((ev) => {
-      setShotQueues((q) => {
-        const next: Record<string, ShotQueueItem[]> = {};
-        for (const [sid, list] of Object.entries(q)) {
-          next[sid] = list.map((item) => {
-            if (item.id !== ev.requestId) return item;
-            if (ev.kind === 'done') return { ...item, status: 'ready', text: ev.text };
-            if (ev.kind === 'error') return { ...item, status: 'error', error: ev.message };
-            return item; // 'delta': extraction never streams
-          });
-        }
-        return next;
-      });
-    });
-
-    window.__mcAutoStart = () => void startCapture();
-    // visual-QA hooks (MC_MAIN_SHOT in electron/main.ts): open a panel from the
-    // main process so it can be screenshotted
-    window.__mcOpenSettings = () => setShowSettings(true);
-    window.__mcOpenHelp = () => setShowHelp(true);
-    return () => {
-      off();
-      offLlm();
-      offShotExtract();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void window.mc.getSettings().then(setSettings);
+    // visual-QA hooks (MC_MAIN_SHOT in electron/devHooks.ts): open a panel
+    // from the main process so it can be screenshotted
+    window.__mcOpenSettings = () => setPanel('settings');
+    window.__mcOpenHelp = () => setPanel('help');
   }, []);
-
-  // ---- persist sessions (debounced) ----
-  useEffect(() => {
-    if (!loaded.current) return;
-    const t = setTimeout(() => window.mc.saveSessions({ sessions, currentId }), 400);
-    return () => clearTimeout(t);
-  }, [sessions, currentId]);
 
   // ---- apply UI theme + answer font scale to the document root ----
   useEffect(() => {
@@ -525,376 +73,43 @@ export function App() {
     return () => mq.removeEventListener('change', apply);
   }, [settings]);
 
-  // auto-dismiss the KB parse notice
-  useEffect(() => {
-    if (!kbNotice) return;
-    const t = setTimeout(() => setKbNotice(null), 8000);
-    return () => clearTimeout(t);
-  }, [kbNotice]);
-
-  // switching sessions or interview type swaps the prefix → dirty (reheats if capturing)
-  useEffect(() => {
-    if (!loaded.current || !currentId) return;
-    prewarm(false);
-  }, [currentId, current?.interviewType, prewarm]);
-
-  // continuous mode: only the OTHER party's questions trigger it (never my own
-  // mic), question-gated + append, per current session.
-  const lastSeg = segments.length ? segments[segments.length - 1] : null;
-  useEffect(() => {
-    if (!continuous || !lastSeg) return;
-    if ((lastSeg.speaker ?? 'them') !== 'them') return; // ignore my own voice
-    if (!isLikelyQuestion(lastSeg.text)) return;
-    const timer = setTimeout(() => {
-      // already covered by an answer asked after this line ended (the answer
-      // hotkey pressed within the 1.1 s, or while that answer waited on ASR)
-      if ((answeredRef.current[currentIdRef.current] ?? 0) < lastSeg.endTs) void askLlm('continuous');
-    }, 1100);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [continuous, lastSeg?.id, lastSeg?.endTs]);
-
-  // Windows: Electron system loopback. macOS/Linux: selected ordinary input
-  // (typically a virtual audio device for meeting/system audio).
-  const startCapture = useCallback(async () => {
-    const inputMode = captureKindForPlatform(window.mc.platform) === 'input';
-    const cap = inputMode ? themInputRef.current! : loopbackRef.current!;
-    // cap.running only turns true once start() resolves; a second call while
-    // getDisplayMedia is pending (capture hotkey pressed twice) would open a
-    // second stream sending the same audio again
-    if (cap.running || captureBusyRef.current) return;
-    captureBusyRef.current = true;
-    try {
-      if (inputMode) {
-        await themInputRef.current!.start(
-          settingsRef.current?.audio.themDeviceId,
-          (buf, ts) => window.mc.sendPcm(buf, ts, 'them'),
-          { audioProcessing: false },
-        );
-        void listMics().then(setMics).catch(() => undefined);
-      } else {
-        await loopbackRef.current!.start((buf, ts) => window.mc.sendPcm(buf, ts, 'them'));
-      }
-      window.mc.captureStarted();
-      setCapturing(true);
-      prewarm(true); // ▶ = the meeting starts — build the KV prefix cache now
-    } catch (e) {
-      setAsr((s) => ({ ...s, lastError: tRef.current.app.captureStartFail((e as Error).message) }));
-    } finally {
-      captureBusyRef.current = false;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const stopCapture = useCallback(async () => {
-    if (captureBusyRef.current) return;
-    captureBusyRef.current = true;
-    const cap =
-      captureKindForPlatform(window.mc.platform) === 'input'
-        ? themInputRef.current!
-        : loopbackRef.current!;
-    try {
-      await cap.stop();
-      window.mc.captureStopped();
-      setCapturing(false);
-    } finally {
-      captureBusyRef.current = false;
-    }
-  }, []);
-
-  // 独立麦克风采集：只转麦克风(我)，与系统声音互不影响，按钮直接控制起停
-  const toggleMicCapture = useCallback(async () => {
-    const mic = micRef.current!;
-    if (mic.running) {
-      await mic.stop();
-      setMicActive(false);
-      return;
-    }
-    try {
-      await mic.start(settings?.audio.micDeviceId, (buf, ts) => window.mc.sendPcm(buf, ts, 'me'));
-      setMicActive(true);
-      if (mics.length === 0) void listMics().then(setMics);
-    } catch (e) {
-      // the name tells the cause (NotAllowedError: Windows privacy switch;
-      // NotReadableError: another app holds the device); the message can be empty
-      const err = e as Error;
-      setAsr((s) => ({ ...s, lastError: tRef.current.app.micStartFail(`${err.name}: ${err.message}`) }));
-    }
-  }, [settings, mics]);
-
-  const setSeg = useCallback(
-    (segId: number, patch: Partial<TranscriptSegment>) => {
-      const sid = currentIdRef.current;
-      setSessions((list) =>
-        list.map((s) =>
-          s.id === sid
-            ? { ...s, segments: (s.segments ?? []).map((g) => (g.id === segId ? { ...g, ...patch } : g)) }
-            : s,
-        ),
-      );
-    },
-    [],
-  );
-
-  const translateSegment = useCallback(
-    (seg: TranscriptSegment) => {
-      if (seg.translating) return; // re-translating an already-translated bubble is allowed
-      setSeg(seg.id, { translating: true });
-      window.mc
-        .translate(seg.text)
-        .then((zh) => setSeg(seg.id, { translation: zh, translating: false }))
-        .catch(() => setSeg(seg.id, { translation: tRef.current.app.translateFail, translating: false }));
-    },
-    [setSeg],
-  );
-
-  const toggleStealth = useCallback(async () => {
-    if (!settings) return;
-    const on = await window.mc.setStealth(!settings.ui.stealth);
-    setSettings({ ...settings, ui: { ...settings.ui, stealth: on } });
-  }, [settings]);
-
-  const toggleInterviewType = useCallback(() => {
-    patchSession(currentIdRef.current, (s) => ({
-      ...s,
-      interviewType: (s.interviewType ?? 'tech') === 'tech' ? 'hr' : 'tech',
-    }));
-  }, [patchSession]);
-
-  const toggleAnswerModel = useCallback(async () => {
-    if (!settings) return;
-    const updated = await window.mc.setSettings({ llm: { answerWithVision: !settings.llm.answerWithVision } });
-    setSettings(updated);
-  }, [settings]);
-
-  const selectMic = useCallback(
-    async (deviceId: string) => {
-      const updated = await window.mc.setSettings({ audio: { micDeviceId: deviceId || undefined } });
-      setSettings(updated);
-      // if the mic is currently on, restart it on the newly chosen device
-      const mic = micRef.current!;
-      if (mic.running) {
-        await mic.stop();
-        await mic
-          .start(deviceId || undefined, (buf, ts) => window.mc.sendPcm(buf, ts, 'me'))
-          .catch(() => setMicActive(false));
-      }
-    },
-    [],
-  );
-
-  const selectThemInput = useCallback(async (deviceId: string) => {
-    const updated = await window.mc.setSettings({ audio: { themDeviceId: deviceId || undefined } });
-    setSettings(updated);
-    settingsRef.current = updated;
-    const input = themInputRef.current!;
-    if (input.running) {
-      await input.stop();
-      await input
-        .start(
-          deviceId || undefined,
-          (buf, ts) => window.mc.sendPcm(buf, ts, 'them'),
-          { audioProcessing: false },
-        )
-        .catch((e) => {
-          window.mc.captureStopped();
-          setCapturing(false);
-          setAsr((s) => ({ ...s, lastError: tRef.current.app.themInputSwitchFail((e as Error).message) }));
-        });
-    }
-  }, []);
-
-  const clearTranscript = useCallback(() => {
-    patchSession(currentIdRef.current, (s) => ({ ...s, segments: [] }));
-  }, [patchSession]);
-
-  const clearAnswers = useCallback(() => {
-    patchSession(currentIdRef.current, (s) => ({ ...s, turns: [] }));
-  }, [patchSession]);
-
-  const cancelTurn = useCallback(
-    (id: string) => {
-      window.mc.llmCancel(id);
-      patchSession(currentIdRef.current, (s) => ({
-        ...s,
-        turns: s.turns.map((t) => (t.id === id ? { ...t, status: 'done' } : t)),
-      }));
-    },
-    [patchSession],
-  );
-
-  const createSession = useCallback(() => {
-    // a new session starts with the interview type of the one it is created from
-    const from = sessionsRef.current.find((x) => x.id === currentIdRef.current);
-    const s = newSession(tRef.current.app.sessionN(sessionsRef.current.length + 1), from?.interviewType);
-    setSessions((list) => [...list, s]);
-    setCurrentId(s.id);
-  }, []);
-
-  const deleteSession = useCallback((id: string) => {
-    setSessions((list) => {
-      const next = list.filter((s) => s.id !== id);
-      if (next.length === 0) {
-        const s = newSession(tRef.current.app.sessionN(1));
-        setCurrentId(s.id);
-        return [s];
-      }
-      setCurrentId((cur) => (cur === id ? next[0].id : cur));
-      return next;
-    });
-    // S cannot outlast its session: drop the queue, cancelling any extraction
-    for (const item of shotQueuesRef.current[id] ?? []) {
-      if (item.status === 'extracting') window.mc.llmCancel(item.id);
-    }
-    setShotQueues((q) => {
-      const { [id]: _dropped, ...rest } = q;
-      return rest;
-    });
-  }, []);
-
-  const renameSession = useCallback(
-    (id: string, name: string) => {
-      patchSession(id, (s) => ({ ...s, name: name.trim() || s.name, titled: true }));
-    },
-    [patchSession],
-  );
-
-  /** the overlays are mutually exclusive: one panel at a time, never stacked */
-  const closePanels = useCallback(() => {
-    setShowSettings(false);
-    setShowHealth(false);
-    setShowDiagnostics(false);
-    setShowHelp(false);
-  }, []);
+  /** 开始/停止: the title-bar button, the tray entry and the capture hotkey
+   * all run this, readiness check included, so they can never disagree */
+  const toggleCapture = useCallback(() => {
+    if (capturing) void stopCapture();
+    else if (asr.phase === 'ready') void startCapture();
+  }, [capturing, asr.phase, startCapture, stopCapture]);
 
   /**
-   * Tray menu -> renderer (Phase 4 §A). Main only forwards what it cannot do
-   * itself, and it has already made the window visible. 开始/停止转写
-   * deliberately runs the SAME code path as the title-bar button, readiness
-   * gate included, so the two can never disagree. Re-subscribed whenever that
-   * state changes — cheaper and less error-prone than a fistful of refs.
+   * Tray menu commands (Phase 4 §A; main forwards only what it cannot do
+   * itself and has already made the window visible) and global hotkeys
+   * (electron/mainWindow.ts registerHotkeys calls window.__mcHotkey).
+   * Re-bound whenever a handler changes — cheaper and less error-prone than
+   * a fistful of refs.
    */
   useEffect(() => {
-    return window.mc.onTrayCommand(({ command }) => {
-      switch (command) {
-        case 'toggle-capture':
-          if (capturing) void stopCapture();
-          else if (asr.phase === 'ready') void startCapture();
-          return;
-        case 'new-session':
-          createSession();
-          return;
-        case 'open-settings':
-          closePanels();
-          setShowSettings(true);
-          return;
-        case 'open-health':
-          closePanels();
-          setShowHealth(true);
-          return;
-        case 'open-help':
-          closePanels();
-          setShowHelp(true);
-          return;
-      }
+    const offTray = window.mc.onTrayCommand(({ command }) => {
+      if (command === 'toggle-capture') toggleCapture();
+      else if (command === 'new-session') createSession();
+      else if (command === 'open-settings') setPanel('settings');
+      else if (command === 'open-health') setPanel('health');
+      else if (command === 'open-help') setPanel('help');
     });
-  }, [capturing, asr.phase, startCapture, stopCapture, createSession, closePanels]);
-
-  /**
-   * Global hotkeys acting on renderer state (electron/main.ts registerHotkeys
-   * calls window.__mcHotkey). Re-bound whenever the capture gate changes,
-   * like the tray handler above.
-   */
-  useEffect(() => {
     window.__mcHotkey = (action) => {
-      switch (action) {
-        case 'shot':
-          void captureShot();
-          return;
-        case 'shotUndo':
-          undoLastShot();
-          return;
-        case 'shotClear':
-          clearShotQueue();
-          return;
-        case 'answer':
-          void askLlm('continuous');
-          return;
-        case 'freeAsk':
-          answerRef.current?.submit();
-          return;
-        case 'capture':
-          // same toggle as the 开始/停止 button
-          if (capturing) void stopCapture();
-          else if (asr.phase === 'ready') void startCapture();
-          return;
-        case 'clearAnswers':
-          clearAnswers();
-          return;
-        case 'clearTranscript':
-          clearTranscript();
-          return;
-      }
+      if (action === 'shot') void captureShot();
+      else if (action === 'shotUndo') undoLastShot();
+      else if (action === 'shotClear') clearShotQueue();
+      else if (action === 'answer') void askLlm('continuous');
+      else if (action === 'freeAsk') answerRef.current?.submit();
+      else if (action === 'capture') toggleCapture();
+      else if (action === 'clearAnswers') clearAnswers();
+      else if (action === 'clearTranscript') clearTranscript();
     };
     return () => {
+      offTray();
       window.__mcHotkey = undefined;
     };
-  }, [
-    capturing,
-    asr.phase,
-    startCapture,
-    stopCapture,
-    askLlm,
-    captureShot,
-    undoLastShot,
-    clearShotQueue,
-    clearAnswers,
-    clearTranscript,
-  ]);
-
-  const pickKb = useCallback(
-    async (slot: KbSlot) => {
-      const r = await window.mc.pickKnowledge(slot);
-      if (!r) return;
-      if (!r.text.trim()) {
-        // deterministic parsers return '' for scanned/image-only PDFs
-        setKbNotice(tRef.current.app.kbNoText(r.name));
-        return;
-      }
-      setKbNotice(null);
-      patchSession(currentIdRef.current, (s) =>
-        slot === 'resume'
-          ? { ...s, resumeName: r.name, resumeText: r.text }
-          : { ...s, jdName: r.name, jdText: r.text },
-      );
-      // material changed → reheat the prefix cache with the fresh bytes;
-      // patchSession is async (React state), so pass the new slots directly
-      window.mc.prewarm({
-        resume: slot === 'resume' ? r.text : currentMaterial().resume,
-        jd: slot === 'jd' ? r.text : currentMaterial().jd,
-        interviewType: currentMaterial().interviewType,
-        immediate: true,
-      });
-    },
-    [patchSession, currentMaterial],
-  );
-
-  const clearKb = useCallback(
-    (slot: KbSlot) => {
-      patchSession(currentIdRef.current, (s) =>
-        slot === 'resume'
-          ? { ...s, resumeName: undefined, resumeText: undefined }
-          : { ...s, jdName: undefined, jdText: undefined },
-      );
-      // prefix went stale; reheats now if capturing, else at the next ▶
-      window.mc.prewarm({
-        resume: slot === 'resume' ? undefined : currentMaterial().resume,
-        jd: slot === 'jd' ? undefined : currentMaterial().jd,
-        interviewType: currentMaterial().interviewType,
-      });
-    },
-    [patchSession, currentMaterial],
-  );
+  }, [toggleCapture, createSession, captureShot, undoLastShot, clearShotQueue, askLlm, clearAnswers, clearTranscript]);
 
   /** the v1 -> v2 migration marks hand-configured profiles; show the notice
    * once until the user dismisses it (persisted in onboarding state) */
@@ -904,11 +119,6 @@ export function App() {
     settings.onboarding.completed &&
     !!settings.onboarding.migratedFromV1 &&
     !settings.onboarding.dismissedUpgradePrompt;
-
-  const dismissUpgradeNotice = async () => {
-    const onboarding = await window.mc.saveOnboardingProgress({ dismissedUpgradePrompt: true });
-    setSettings((s) => (s ? { ...s, onboarding } : s));
-  };
 
   const visionReady =
     !!settings?.llm.answerWithVision &&
@@ -927,229 +137,135 @@ export function App() {
     [settings, asr, capturing],
   );
   const answersReady = health?.answersAvailable ?? true;
+  const closePanel = () => setPanel(null);
 
   return (
     <I18nProvider lang={settings?.ui.lang}>
-    <div className="app">
-      <header className="titlebar">
-        <span className="brand">MeetingCopilot</span>
-        <div className="titlebar-actions">
-          <button
-            className={capturing ? 'btn btn-live' : 'btn btn-primary'}
-            onClick={() => (capturing ? void stopCapture() : void startCapture())}
-            disabled={asr.phase !== 'ready'}
-            title={
-              captureKindForPlatform(window.mc.platform) === 'loopback'
-                ? capturing
-                  ? t.titlebar.stopTitle
-                  : t.titlebar.startTitle
-                : capturing
-                  ? t.titlebar.stopInputTitle
-                  : t.titlebar.startInputTitle
-            }
-          >
-            {capturing ? t.titlebar.stop : t.titlebar.start}
-          </button>
-          {captureKindForPlatform(window.mc.platform) === 'input' && mics.length > 0 && (
-            <select
-              className="mic-select"
-              value={settings?.audio.themDeviceId ?? ''}
-              onChange={(e) => void selectThemInput(e.target.value)}
-              title={t.titlebar.themDeviceTitle}
-            >
-              <option value="">{t.titlebar.themDeviceDefault}</option>
-              {mics.map((m) => (
-                <option key={m.deviceId} value={m.deviceId}>
-                  {(m.label || t.titlebar.themDeviceDefault).slice(0, 14)}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            className={continuous ? 'btn btn-on' : 'btn'}
-            onClick={() => setContinuous((v) => !v)}
-            title={t.titlebar.continuousTitle}
-          >
-            {t.titlebar.continuous}
-          </button>
-          <button
-            className={settings?.llm.answerWithVision ? 'btn btn-on' : 'btn'}
-            onClick={() => void toggleAnswerModel()}
-            title={t.titlebar.modelTitle}
-          >
-            {settings?.llm.answerWithVision ? t.titlebar.vision : t.titlebar.textOnly}
-          </button>
-          <button className="btn" onClick={toggleInterviewType} title={t.titlebar.interviewTypeTitle}>
-            {t.titlebar.interviewType(current?.interviewType === 'hr')}
-          </button>
-          <button
-            className={micActive ? 'btn btn-live' : 'btn'}
-            onClick={() => void toggleMicCapture()}
-            title={t.titlebar.micTitle}
-          >
-            {micActive ? t.titlebar.micOn : t.titlebar.micOff}
-          </button>
-          {micActive && mics.length > 0 && (
-            <select
-              className="mic-select"
-              value={settings?.audio.micDeviceId ?? ''}
-              onChange={(e) => void selectMic(e.target.value)}
-              title={t.titlebar.micDeviceTitle}
-            >
-              <option value="">{t.titlebar.micDefault}</option>
-              {mics.map((m) => (
-                <option key={m.deviceId} value={m.deviceId}>
-                  {(m.label || t.titlebar.micDefault).slice(0, 10)}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            className={settings?.ui.stealth ? 'btn btn-on' : 'btn'}
-            onClick={() => void toggleStealth()}
-            title={
-              window.mc.platform === 'darwin'
-                ? t.titlebar.stealthMacTitle
-                : t.titlebar.stealthTitle
-            }
-          >
-            {t.titlebar.stealth(!!settings?.ui.stealth)}
-          </button>
-          <button className="btn" onClick={() => setShowHud((v) => !v)} title={t.titlebar.hudTitle}>
-            HUD
-          </button>
-        </div>
-        <div className="titlebar-window-controls">
-          <button className="btn" onClick={() => setShowSettings((v) => !v)} title={t.titlebar.settingsTitle}>
-            {t.titlebar.settingsTitle}
-          </button>
-          <button className="btn" onClick={() => window.mc.hide()} title={t.titlebar.hideTitle}>
-            —
-          </button>
-          <button className="btn btn-close" onClick={() => window.mc.quit()} title={t.titlebar.quitTitle}>
-            ✕
-          </button>
-        </div>
-      </header>
-
-      {/* grandfathered users (settings.json predates the wizard) get one
-          dismissible pointer at the new wizard; wizard-created profiles never
-          carry onboarding.migratedFromV1, so they never see it */}
-      {showUpgradeNotice && (
-        <div className="upgrade-banner">
-          <span>{t.app.upgradeNotice}</span>
-          <button className="btn btn-sm btn-primary" onClick={() => void window.mc.rerunOnboarding()}>
-            {t.app.upgradeCheck}
-          </button>
-          <button className="btn btn-sm" onClick={() => void dismissUpgradeNotice()}>
-            {t.app.upgradeSkip}
-          </button>
-        </div>
-      )}
-
-      {showHealth && settings && health && (
-        <ServiceHealthPanel
+      <div className="app">
+        <TitleBar
           settings={settings}
-          health={health}
-          onClose={() => setShowHealth(false)}
-          onOpenSettings={() => {
-            setShowHealth(false);
-            setShowSettings(true);
-          }}
-          onOpenDiagnostics={() => {
-            setShowHealth(false);
-            setShowDiagnostics(true);
-          }}
-          onSettingsRefreshed={setSettings}
+          onSettings={setSettings}
+          capture={capture}
+          asrReady={asr.phase === 'ready'}
+          onToggleCapture={toggleCapture}
+          continuous={answering.continuous}
+          onToggleContinuous={() => answering.setContinuous((v) => !v)}
+          hr={current?.interviewType === 'hr'}
+          onToggleInterviewType={sessions.toggleInterviewType}
+          onToggleHud={() => setShowHud((v) => !v)}
+          onToggleSettings={() => setPanel((p) => (p === 'settings' ? null : 'settings'))}
         />
-      )}
 
-      {showDiagnostics && <DiagnosticsPanel onClose={() => setShowDiagnostics(false)} />}
+        {/* grandfathered users (settings.json predates the wizard) get one
+            dismissible pointer at the new wizard; wizard-created profiles never
+            carry onboarding.migratedFromV1, so they never see it */}
+        {showUpgradeNotice && (
+          <div className="upgrade-banner">
+            <span>{t.app.upgradeNotice}</span>
+            <button className="btn btn-sm btn-primary" onClick={() => void window.mc.rerunOnboarding()}>
+              {t.app.upgradeCheck}
+            </button>
+            <button
+              className="btn btn-sm"
+              onClick={async () => {
+                const onboarding = await window.mc.saveOnboardingProgress({ dismissedUpgradePrompt: true });
+                setSettings((s) => (s ? { ...s, onboarding } : s));
+              }}
+            >
+              {t.app.upgradeSkip}
+            </button>
+          </div>
+        )}
 
-      {showHelp && (
-        <HelpPanel
-          onClose={() => setShowHelp(false)}
-          onOpenSettings={() => {
-            setShowHelp(false);
-            setShowSettings(true);
-          }}
-          onOpenDiagnostics={() => {
-            setShowHelp(false);
-            setShowDiagnostics(true);
-          }}
-        />
-      )}
+        {panel === 'health' && settings && health && (
+          <ServiceHealthPanel
+            settings={settings}
+            health={health}
+            onClose={closePanel}
+            onOpenSettings={() => setPanel('settings')}
+            onOpenDiagnostics={() => setPanel('diagnostics')}
+            onSettingsRefreshed={setSettings}
+          />
+        )}
 
-      {showSettings && settings && (
-        <SettingsPanel
-          settings={settings}
-          onSaved={(s) => {
-            setSettings(s);
-            setShowSettings(false);
-          }}
-          onClose={() => setShowSettings(false)}
-          onRerunWizard={() => {
-            setShowSettings(false);
-            void window.mc.rerunOnboarding();
-          }}
-          onOpenDiagnostics={() => {
-            setShowSettings(false);
-            setShowDiagnostics(true);
-          }}
-          onOpenHelp={() => {
-            setShowSettings(false);
-            setShowHelp(true);
-          }}
-        />
-      )}
+        {panel === 'diagnostics' && <DiagnosticsPanel onClose={closePanel} />}
 
-      <div className="panes">
-        <TranscriptPanel
-          segments={segments}
-          partials={partials}
-          answersReady={answersReady}
-          answersHint={t.health.answersDisabled}
-          onAsk={(text) => askLlm('segment', text)}
-          onTranslate={translateSegment}
-          onClear={clearTranscript}
-        />
-        <AnswerSession
-          ref={answerRef}
-          sessions={sessions}
-          currentId={currentId}
-          turns={current?.turns ?? []}
-          resumeName={current?.resumeName}
-          resumeChars={current?.resumeText?.length ?? 0}
-          jdName={current?.jdName}
-          jdChars={current?.jdText?.length ?? 0}
-          notice={kbNotice}
-          visionReady={visionReady}
-          answersReady={answersReady}
-          answersHint={t.health.answersDisabled}
-          onSwitch={setCurrentId}
-          onNew={createSession}
-          onDelete={deleteSession}
-          onRename={renameSession}
-          onPickKb={(slot) => void pickKb(slot)}
-          onClearKb={clearKb}
-          onCancel={cancelTurn}
-          onClear={clearAnswers}
-          onFreeAsk={(q) => askLlm('free', q)}
-          onShotAsk={askShot}
-          shotQueue={currentShotQueue}
-          onShotQueueRemove={(id) => removeShotQueueItem(currentIdRef.current, id)}
-          onShotQueueClear={() => clearShotQueue()}
+        {panel === 'help' && (
+          <HelpPanel
+            onClose={closePanel}
+            onOpenSettings={() => setPanel('settings')}
+            onOpenDiagnostics={() => setPanel('diagnostics')}
+          />
+        )}
+
+        {panel === 'settings' && settings && (
+          <SettingsPanel
+            settings={settings}
+            onSaved={(s) => {
+              setSettings(s);
+              closePanel();
+            }}
+            onClose={closePanel}
+            onRerunWizard={() => {
+              closePanel();
+              void window.mc.rerunOnboarding();
+            }}
+            onOpenDiagnostics={() => setPanel('diagnostics')}
+            onOpenHelp={() => setPanel('help')}
+          />
+        )}
+
+        <div className="panes">
+          <TranscriptPanel
+            segments={current?.segments ?? []}
+            partials={stream.partials}
+            answersReady={answersReady}
+            answersHint={t.health.answersDisabled}
+            onAsk={(text) => askLlm('segment', text)}
+            onTranslate={answering.translateSegment}
+            onClear={clearTranscript}
+          />
+          <AnswerSession
+            ref={answerRef}
+            sessions={sessions.sessions}
+            currentId={sessions.currentId}
+            turns={current?.turns ?? []}
+            resumeName={current?.resumeName}
+            resumeChars={current?.resumeText?.length ?? 0}
+            jdName={current?.jdName}
+            jdChars={current?.jdText?.length ?? 0}
+            notice={sessions.kbNotice}
+            visionReady={visionReady}
+            answersReady={answersReady}
+            answersHint={t.health.answersDisabled}
+            onSwitch={sessions.setCurrentId}
+            onNew={createSession}
+            onDelete={(id) => {
+              sessions.deleteSession(id);
+              // S cannot outlast its session: drop the queue, cancelling any extraction
+              clearShotQueue(id);
+            }}
+            onRename={sessions.renameSession}
+            onPickKb={(slot) => void sessions.pickKb(slot)}
+            onClearKb={sessions.clearKb}
+            onCancel={answering.cancelTurn}
+            onClear={clearAnswers}
+            onFreeAsk={(q) => askLlm('free', q)}
+            onShotAsk={answering.askShot}
+            shotQueue={shots.shotQueues[sessions.currentId] ?? []}
+            onShotQueueRemove={(id) => shots.removeShotQueueItem(currentIdRef.current, id)}
+            onShotQueueClear={() => clearShotQueue()}
+          />
+        </div>
+
+        <StatusBar
+          asr={asr}
+          capturing={capturing}
+          hud={showHud ? stream.hud : undefined}
+          health={health ?? undefined}
+          onOpenHealth={() => setPanel((p) => (p === 'health' ? null : 'health'))}
         />
       </div>
-
-      <StatusBar
-        asr={asr}
-        capturing={capturing}
-        hud={showHud ? hud : undefined}
-        health={health ?? undefined}
-        onOpenHealth={() => setShowHealth((v) => !v)}
-      />
-    </div>
     </I18nProvider>
   );
 }

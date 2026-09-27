@@ -11,7 +11,7 @@
  *
  * 1. "main window" — MC_DEV_DEFAULT_LOCAL_ASR=1 marks onboarding complete, so
  *    boot must go straight to the overlay. Evidence: the MC_E2E_LLM hook
- *    (electron/main.ts, did-finish-load) runs a script in the renderer that
+ *    (electron/devHooks.ts, on did-finish-load) runs a script in the renderer that
  *    calls window.mc.llmAsk and waits for the reply, then main logs
  *    `[e2e-llm] {...}`. That single line proves: main bootstrapped ->
  *    BrowserWindow created -> out/renderer/index.html loaded from inside

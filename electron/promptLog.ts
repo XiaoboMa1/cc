@@ -1,8 +1,10 @@
 /**
  * Opt-in local debug log of what the answerer model actually receives and
- * returns. OFF unless MC_PROMPT_LOG=<file path> is set; nothing here is
- * uploaded or folded into buildDiagnosticsReport, which deliberately excludes
- * transcripts/answers from the one report a user might share (diagnostics.ts).
+ * returns. OFF unless `--debug-log` / MC_DEBUG_LOG / MC_PROMPT_LOG=<file path>
+ * is set (electron/llmIpc.ts PROMPT_LOG_PATH, which also writes the file);
+ * nothing here is uploaded or folded into buildDiagnosticsReport, which
+ * deliberately excludes transcripts/answers from the one report a user might
+ * share (diagnostics.ts).
  *
  * The recent-transcript window resent on every ask is the redundant part:
  * each call carries up to 30 segments, and consecutive asks in the same

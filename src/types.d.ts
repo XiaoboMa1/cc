@@ -9,7 +9,7 @@ declare global {
     mcSetup: McSetupApi;
     /** E2E hook: main calls this (with user gesture) when MC_AUTOSTART=1 */
     __mcAutoStart?: () => void;
-    /** a global hotkey fired (electron/main.ts registerHotkeys runs this with
+    /** a global hotkey fired (electron/mainWindow.ts registerHotkeys runs this with
      * a user gesture, which the capture hotkey's getDisplayMedia needs) */
     __mcHotkey?: (action: HotkeyAction) => void;
     /** visual-QA hooks: main calls these when MC_MAIN_SHOT=<dir> */

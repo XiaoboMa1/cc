@@ -14,7 +14,6 @@ const zh = {
   locale: 'zh-CN',
   uiLang: 'zh' as UiLang,
   app: {
-    newSession: '新会话',
     sessionN: (n: number) => `会话 ${n}`,
     legacyKbName: '资料',
     latestRemark: '对方最新发言',
@@ -450,7 +449,6 @@ const en: Dict = {
   locale: 'en-US',
   uiLang: 'en',
   app: {
-    newSession: 'New session',
     sessionN: (n: number) => `Session ${n}`,
     legacyKbName: 'Notes',
     latestRemark: 'Their latest remark',

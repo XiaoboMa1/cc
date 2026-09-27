@@ -3,17 +3,19 @@ import {
   IPC,
   type AppInfo,
   type AsrEvent,
-  type InterviewType,
   type KbSlot,
   type LlmAskPayload,
   type LlmEvent,
+  type MemoUpdatePayload,
   type OnboardingProgressPatch,
   type OnboardingState,
+  type PrewarmPayload,
   type ProviderTestRequest,
   type ProviderTestResult,
   type PublicSettings,
   type SessionsFile,
   type SettingsPatch,
+  type ShotAskPayload,
   type ShotExtractPayload,
   type TrayCommandPayload,
 } from '../shared/protocol';
@@ -43,12 +45,7 @@ export interface McApi {
   /** pull the last ready/status events (call AFTER onAsrEvent subscription) */
   asrReplay(): Promise<{ ready: AsrEvent | null; status: AsrEvent | null }>;
   llmAsk(payload: LlmAskPayload): void;
-  shotAsk(payload: {
-    requestId: string;
-    question: string;
-    background?: string;
-    imageDataUrl?: string;
-  }): void;
+  shotAsk(payload: ShotAskPayload): void;
   /** R6: extract text (E) from one queued screenshot; result on onShotExtractEvent */
   shotExtract(payload: ShotExtractPayload): void;
   /** capture full screen, drag a stealth region overlay; returns cropped dataURL or null */
@@ -60,11 +57,10 @@ export interface McApi {
   /** overlay-only: cancel */
   regionCancel(): void;
   llmCancel(requestId: string): void;
-  /** P1-6: warm the DeepSeek prefix cache with the session's material;
-   * immediate=true warms even when not capturing (▶ start / material import) */
-  prewarm(payload: { resume?: string; jd?: string; interviewType?: InterviewType; immediate?: boolean }): void;
+  /** P1-6: warm the DeepSeek prefix cache with the session's material */
+  prewarm(payload: PrewarmPayload): void;
   /** P1-5: fold a finished Q&A into the rolling memo ('' = keep the old one) */
-  memoUpdate(p: { memo: string; question: string; answer: string }): Promise<string>;
+  memoUpdate(p: MemoUpdatePayload): Promise<string>;
   onLlmEvent(cb: (ev: LlmEvent) => void): () => void;
   /** R6: extraction result for a queued screenshot */
   onShotExtractEvent(cb: (ev: LlmEvent) => void): () => void;

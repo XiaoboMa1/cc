@@ -7,7 +7,7 @@
  * paste an API key.
  *
  * It keeps the main window's navigation hardening though: window.open denied,
- * will-navigate prevented. (The region-selection overlay in main.ts sets
+ * will-navigate prevented. (The region-selection overlay in regionPicker.ts sets
  * neither — that is a precedent to fix, not to copy.)
  */
 import { BrowserWindow } from 'electron';
@@ -16,7 +16,7 @@ import { join } from 'path';
 
 /** logged so the packaged smoke test can prove first-run gating still works */
 export const SETUP_WINDOW_MARKER = '[setup] window created';
-/** logged once the wizard renderer completes its first IPC call (main.ts) */
+/** logged once the wizard renderer completes its first IPC call (setupFlow.ts) */
 export const SETUP_READY_MARKER = '[setup] wizard ready';
 /** logged after an MC_SETUP_SHOT capture (visual-QA tooling greps for it) */
 export const SETUP_SHOT_MARKER = '[setup] screenshot';
@@ -30,7 +30,7 @@ function forcedStep(): string | null {
 }
 
 /**
- * Visual-QA hook, env-gated exactly like the MC_E2E_* hooks in main.ts:
+ * Visual-QA hook, env-gated exactly like the MC_E2E_* hooks in devHooks.ts:
  * MC_SETUP_SHOT=<dir> writes a PNG of the rendered wizard into <dir> once the
  * page has painted. Never runs unless the variable is set.
  */

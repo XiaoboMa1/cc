@@ -122,3 +122,22 @@ export function percentile(values: readonly number[], p: number): number | undef
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[idx];
 }
+
+/**
+ * The question of a continuous answer (K-A or the answer hotkey): every
+ * interviewer ('them') line that ended after `answeredTs`, joined, so one
+ * question asked over several sentences is answered as one. With no new line
+ * (only new screenshots) it is the latest interviewer line again.
+ * `answeredUpTo` is the newest endTs among the new lines (0 when none).
+ */
+export function pickContinuousQuestion(
+  segments: readonly TranscriptSegment[],
+  answeredTs: number,
+): { question: string | undefined; answeredUpTo: number } {
+  const theirs = segments.filter((g) => (g.speaker ?? 'them') === 'them');
+  const fresh = theirs.filter((g) => g.endTs > answeredTs);
+  return {
+    question: (fresh.length ? fresh : theirs.slice(-1)).map((g) => g.text).join('\n') || undefined,
+    answeredUpTo: Math.max(0, ...fresh.map((g) => g.endTs)),
+  };
+}

@@ -40,7 +40,7 @@ export type UiLang = 'zh' | 'en';
 export type KbSlot = 'resume' | 'jd';
 
 /**
- * Global hotkeys: Electron accelerators, '' = off. electron/main.ts
+ * Global hotkeys: Electron accelerators, '' = off. electron/mainWindow.ts
  * registerHotkeys registers them system-wide, so while the app runs these
  * combinations never reach another app (browser, code editor).
  */
@@ -561,6 +561,32 @@ export type LlmEvent =
 export interface ShotExtractPayload {
   requestId: string;
   imageDataUrl: string;
+}
+
+/** R5: renderer -> main, answer a question about a screenshot (vision model).
+ * No imageDataUrl = main captures the full screen itself. */
+export interface ShotAskPayload {
+  requestId: string;
+  question: string;
+  background?: string;
+  imageDataUrl?: string;
+}
+
+/** P1-6: renderer -> main, warm the provider prefix cache with this material;
+ * immediate=true warms even when not capturing (▶ start / material import) */
+export interface PrewarmPayload {
+  resume?: string;
+  jd?: string;
+  interviewType?: InterviewType;
+  immediate?: boolean;
+}
+
+/** P1-5: renderer -> main, fold one finished Q&A into the rolling memo
+ * (main returns '' to keep the old memo) */
+export interface MemoUpdatePayload {
+  memo: string;
+  question: string;
+  answer: string;
 }
 
 // ---------- System tray (main -> renderer) ----------

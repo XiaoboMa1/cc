@@ -5,6 +5,7 @@ import {
   joinTexts,
   nextSegmentId,
   percentile,
+  pickContinuousQuestion,
   reindexSegments,
   type TranscriptSegment,
 } from '../shared/transcript';
@@ -141,5 +142,34 @@ describe('percentile', () => {
     expect(percentile(vals, 95)).toBe(95);
     expect(percentile([], 50)).toBeUndefined();
     expect(percentile([7], 95)).toBe(7);
+  });
+});
+
+describe('pickContinuousQuestion', () => {
+  const line = (id: number, text: string, endTs: number, speaker: 'them' | 'me' = 'them'): TranscriptSegment => ({
+    id,
+    text,
+    startTs: endTs - 500,
+    endTs,
+    speaker,
+  });
+
+  it('joins every interviewer line that ended after the previous answer', () => {
+    const segs = [line(1, 'old', 1000), line(2, 'part one', 3000), line(3, 'mine', 3500, 'me'), line(4, 'part two', 4000)];
+    expect(pickContinuousQuestion(segs, 2000)).toEqual({ question: 'part one\npart two', answeredUpTo: 4000 });
+  });
+
+  it('falls back to the latest interviewer line when nothing new arrived', () => {
+    const segs = [line(1, 'first', 1000), line(2, 'latest', 2000), line(3, 'mine', 3000, 'me')];
+    expect(pickContinuousQuestion(segs, 5000)).toEqual({ question: 'latest', answeredUpTo: 0 });
+  });
+
+  it('has no question without any interviewer line', () => {
+    expect(pickContinuousQuestion([line(1, 'mine', 1000, 'me')], 0)).toEqual({ question: undefined, answeredUpTo: 0 });
+  });
+
+  it('treats a segment without speaker as the interviewer', () => {
+    const legacy: TranscriptSegment = { id: 1, text: 'legacy', startTs: 0, endTs: 1000 };
+    expect(pickContinuousQuestion([legacy], 0).question).toBe('legacy');
   });
 });

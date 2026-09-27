@@ -1,4 +1,4 @@
-import type { AsrUiState, HudStats } from '../App';
+import type { AsrUiState, HudStats } from '../hooks/useAsrStream';
 import { chipTone, type ChipTone, type ServiceHealthReport } from '../../shared/healthState';
 import { useT } from '../i18n';
 

@@ -22,6 +22,8 @@ import type {
 } from '../shared/protocol';
 import { defaultHotkeysForPlatform } from '../shared/platform';
 import { providerIdForEndpoint } from '../shared/providerCatalog';
+import type { LlmConfig } from './llm/adapter';
+import type { VisionConfig } from './llm/vision';
 
 export interface SecretCipher {
   available(): boolean;
@@ -50,7 +52,7 @@ export function defaultSettings(platform: string = process.platform): SettingsFi
   return {
     version: 2,
     // A brand new profile has never seen the wizard; the setup window owns
-    // startup until it completes (electron/main.ts gating).
+    // startup until it completes (electron/main.ts boot gating).
     // MC_DEV_DEFAULT_LOCAL_ASR=1 keeps the pre-wizard developer workflow:
     // the defaults below already select the local Fun-ASR sidecar, so all the
     // flag has to do is let boot go straight to the main window.
@@ -460,41 +462,34 @@ export class SettingsStore {
   }
 
   getLlmApiKey(): string | undefined {
-    if (!this.data.llm.apiKeyEnc) return undefined;
-    try {
-      return this.cipher.decrypt(this.data.llm.apiKeyEnc);
-    } catch {
-      return undefined;
-    }
+    return this.decrypt(this.data.llm.apiKeyEnc);
   }
 
   getVisionApiKey(): string | undefined {
-    if (!this.data.vision.apiKeyEnc) return undefined;
-    try {
-      return this.cipher.decrypt(this.data.vision.apiKeyEnc);
-    } catch {
-      return undefined;
-    }
+    return this.decrypt(this.data.vision.apiKeyEnc);
   }
 
   getCloudAsrApiKey(): string | undefined {
-    const enc = this.data.asr.cloud?.apiKeyEnc;
-    if (!enc) return undefined;
-    try {
-      return this.cipher.decrypt(enc);
-    } catch {
-      return undefined;
-    }
+    return this.decrypt(this.data.asr.cloud?.apiKeyEnc);
   }
 
   getRealtimeAsrApiKey(): string | undefined {
-    const enc = this.data.asr.realtime?.apiKeyEnc;
-    if (!enc) return undefined;
-    try {
-      return this.cipher.decrypt(enc);
-    } catch {
-      return undefined;
-    }
+    return this.decrypt(this.data.asr.realtime?.apiKeyEnc);
+  }
+
+  /** text LLM connection; null until a key is stored */
+  getLlmEndpoint(): LlmConfig | null {
+    const apiKey = this.getLlmApiKey();
+    return apiKey ? { baseUrl: this.data.llm.baseUrl, model: this.data.llm.model, apiKey } : null;
+  }
+
+  /** vision model connection; null unless base URL, model and key are all set */
+  getVisionEndpoint(): VisionConfig | null {
+    const v = this.data.vision;
+    const apiKey = this.getVisionApiKey();
+    return v.baseUrl && v.model && apiKey
+      ? { baseUrl: v.baseUrl, model: v.model, apiKey, proxyUrl: v.proxyUrl }
+      : null;
   }
 
   /** the stored key behind one slot — used by 「用已保存的 Key 重新测试」 */
@@ -508,6 +503,16 @@ export class SettingsStore {
         return this.getCloudAsrApiKey();
       case 'asr-realtime':
         return this.getRealtimeAsrApiKey();
+    }
+  }
+
+  /** a stored key that no longer decrypts (other machine / OS profile) reads as unset */
+  private decrypt(enc: string | undefined): string | undefined {
+    if (!enc) return undefined;
+    try {
+      return this.cipher.decrypt(enc);
+    } catch {
+      return undefined;
     }
   }
 }
