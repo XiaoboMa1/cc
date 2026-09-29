@@ -250,7 +250,7 @@ export function App() {
             onClearKb={sessions.clearKb}
             onCancel={answering.cancelTurn}
             onClear={clearAnswers}
-            onFreeAsk={(q) => askLlm('free', q)}
+            onFreeAsk={(q) => (q ? askLlm('free', q) : askLlm('continuous'))}
             onShotAsk={answering.askShot}
             shotQueue={shots.shotQueues[sessions.currentId] ?? []}
             onShotQueueRemove={(id) => shots.removeShotQueueItem(currentIdRef.current, id)}

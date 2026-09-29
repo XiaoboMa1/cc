@@ -91,6 +91,7 @@ export function AnswerSession({
   onClearKb: (slot: KbSlot) => void;
   onCancel: (id: string) => void;
   onClear: () => void;
+  /** '' when the box is empty: then the same request as Ctrl+Enter (queued S + new TRA) */
   onFreeAsk: (question: string) => void;
   onShotAsk: (question: string, imageDataUrl?: string) => void;
   /** R6: screenshots queued for the current session (Ctrl+H/L/R) */
@@ -117,9 +118,9 @@ export function AnswerSession({
   };
 
   const submit = () => {
-    const q = inputRef.current?.value.trim();
+    const q = inputRef.current?.value.trim() ?? '';
     // !answersReady: the 问 button is disabled, so the hotkey does nothing either
-    if (!q || !answersReady) return;
+    if (!answersReady) return;
     onFreeAsk(q);
     if (inputRef.current) inputRef.current.value = '';
   };

@@ -8,8 +8,8 @@ All prompts, answers, memos and E are in English. The one exception is `译`, wh
 
 | Operation | Model | Prompt | Request carries | Result |
 | --- | --- | --- | --- | --- |
-| `答`, `回答选中`, Ctrl+Enter, K-A | ai-ans | answer prompt of the session's interview type (§3) | §4 | answer turn `答` / `持续` |
-| `问`, Ctrl+M | ai-ans, without the answer prompt | reference material only (§6.1) | typed text, earlier `问` / `截图问` turns, resume, JD, E of every queued S, recent TRA; earlier answers while `麦克风` is off | answer turn `问` |
+| `答`, `回答选中`, Ctrl+Enter, K-A; `问` / Enter / Ctrl+M with an empty box | ai-ans | answer prompt of the session's interview type (§3) | §4 | answer turn `答` / `持续` |
+| `问` / Enter / Ctrl+M with typed text | ai-ans, without the answer prompt | reference material only (§6.1) | typed text, earlier `问` / `截图问` turns, resume, JD, E of every queued S, recent TRA; earlier answers while `麦克风` is off | answer turn `问` |
 | Ctrl+H | ai-ext (the vision model set in `设置`) | extraction (§6.2) | the S image | E on the thumbnail |
 | `截图问` | vision model | screenshot question (§6.3) | the S image, typed text, resume + JD | answer turn `截图` |
 | `译` on a bubble | text model | translation (§6.4) | that bubble's text | Chinese text under the bubble |
