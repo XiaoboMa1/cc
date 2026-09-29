@@ -9,7 +9,7 @@ All prompts, answers, memos and E are in English. The one exception is `译`, wh
 | Operation | Model | Prompt | Request carries | Result |
 | --- | --- | --- | --- | --- |
 | `答`, `回答选中`, Ctrl+Enter, K-A | ai-ans | answer prompt of the session's interview type (§3) | §4 | answer turn `答` / `持续` |
-| `问`, Ctrl+M | ai-ans, without the answer prompt | reference material only (§6.1) | typed text, earlier `问` / `截图问` turns, resume, JD, recent TRA; earlier answers while `麦克风` is off | answer turn `问` |
+| `问`, Ctrl+M | ai-ans, without the answer prompt | reference material only (§6.1) | typed text, earlier `问` / `截图问` turns, resume, JD, E of every queued S, recent TRA; earlier answers while `麦克风` is off | answer turn `问` |
 | Ctrl+H | ai-ext (the vision model set in `设置`) | extraction (§6.2) | the S image | E on the thumbnail |
 | `截图问` | vision model | screenshot question (§6.3) | the S image, typed text, resume + JD | answer turn `截图` |
 | `译` on a bubble | text model | translation (§6.4) | that bubble's text | Chinese text under the bubble |
@@ -23,7 +23,7 @@ All prompts, answers, memos and E are in English. The one exception is `译`, wh
 The first message of every answer request (§4) is one of two prompts, chosen by the session's `面:技术` / `面:HR` at the moment of the request. For the same type, resume and JD it is identical from one request to the next, so the provider can reuse it (lower cost, faster first word).
 
 **Both types**
-- Written as the iee will say it: first person, spoken English, short sentences, contractions; readable aloud unchanged.
+- Written as the verbatim transcript of the iee answering unprepared: first person, spoken English, contractions; stops in brackets such as `(stop 2 s)`, hesitations (`um`, `let me think`), restarts (`we were... we were`) and self-corrections (`... no, sorry, let me correct that, ...`) kept as spoken; readable aloud unchanged.
 - Plain text: no headings, bullets, numbering, bold or code blocks; each point on a new line.
 - Only facts from the resume and from what the iee already said; never an invented company, project, number or date.
 - Style rules (anti-AI wording), applied without mentioning them:
@@ -66,7 +66,7 @@ Two messages:
    - `<interview_conversation>`: the recent TRA, at most the last 30 bubbles and 6000 characters, oldest dropped first; consecutive bubbles of one speaker in one `<interviewer>` or `<interviewee>` element, one bubble per line;
    - `<earlier_answers>`: only while `麦克风` is off. The session's 8 most recent finished `答` / `持续` turns, oldest first, each as one `<turn>` holding `<asked>` (the question it answered; left out for an answer from the screenshots alone) and `<answer>` (its text). With `麦克风` on it is left out, because `<interview_conversation>` already holds what the iee said as `<interviewee>` lines. `问` and `截图问` turns never appear here: they are the iee's side conversation with the AI;
    - `<question>`: what the trigger answers (`sci-keyboard.md` "Answer triggers");
-   - last line: `Answer the <question> now, in the words I will say.` When there is no `<question>` (no `对方` bubble yet, answering from screenshots): `No question has been asked aloud yet: answer from <visual_context> and <interview_conversation> now, in the words I will say.`
+   - last line: `Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.` When there is no `<question>` (no `对方` bubble yet, answering from screenshots): `No question has been asked aloud yet: answer from <visual_context> and <interview_conversation> now, as the transcript of me saying it: stops, hesitations and self-corrections included.`
 
 The prompt (§3) tells the model what each tag holds, and that the questions earlier in `<interview_conversation>` have been answered already: only `<question>` is answered.
 
@@ -89,7 +89,7 @@ Text is passed as captured: `<` and `>` inside the transcript or E (e.g. `vector
 ## Other prompts
 
 [Free question (`问`, Ctrl+M)]
-1. **system**, only when at least one block exists: `Reference material. Use it only if my question needs it.`, then `<resume>` (≤ 8000 characters), `<job_description>` (≤ 8000), `<interview_conversation>` and `<earlier_answers>` (both as §4).
+1. **system**, only when at least one block exists: `Reference material. Use it only if my question needs it.`, then `<resume>` (≤ 8000 characters), `<job_description>` (≤ 8000), `<visual_context>`, `<interview_conversation>` and `<earlier_answers>` (all as §4). A request sent while an S is still being extracted waits for its E, as `答` does.
 2. The session's 8 most recent finished `问` and `截图问` turns, oldest first, each as **user** (the typed text) then **assistant** (the reply).
 3. **user**: the typed text, unchanged.
 
@@ -160,7 +160,7 @@ let me give you an example. if i
 what is the number of the operations needed?
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 No memo yet.
@@ -204,7 +204,7 @@ what about another case
 what is the time needed?
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 E2 is absent (removed in step 10); E3 is numbered 2. A1 is not sent again: the iee's reading of it is the `<interviewee>` line.
@@ -251,7 +251,7 @@ what about another case
 what is the time needed?
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 Without `<earlier_answers>`, nothing would show that the first two interviewer lines were already answered.
@@ -277,7 +277,7 @@ Next one: design a URL shortener.
 Next one: design a URL shortener.
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 ### UC-2 T4 — K-A, fifth answer
@@ -332,7 +332,7 @@ Walk me through that project.
 Walk me through that project.
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 E1 and E3, both from the coding problem, are still present at T4 because the strip was not cleared.
@@ -378,7 +378,7 @@ What was your role exactly?
 What was your role exactly?
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 No `<visual_context>`: the session has no screenshots.
@@ -428,7 +428,7 @@ Why do you want to leave your current job?
 Why do you want to leave your current job?
 </question>
 
-Answer the <question> now, in the words I will say.
+Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.
 ```
 
 The `问` turn of step 6 is not in the memo: memo updates follow `答` and `持续` turns only.

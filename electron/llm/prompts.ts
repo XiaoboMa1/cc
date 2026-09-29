@@ -41,6 +41,29 @@ Never write:
 Apply these while writing and never mention them.
 </style>`;
 
+/** how every answer must be delivered, for both interview types: a verbatim
+ * transcript of unprepared speech, not a written text */
+const SPOKEN = `<spoken_register>
+What you write is not an answer text. It is the verbatim transcript of me answering out loud with no preparation, and I read it out word for word. A reader of the transcript must not be able to tell it was planned.
+- Build sentences the way speech does: mostly under 15 words, joined with "and", "so", "but", "because", "then". No semicolons, no colons, no parentheses except the stop markers below, no slashes, no "e.g.", "i.e." or "etc.".
+- Never use written connectors: furthermore, moreover, additionally, in addition, firstly, secondly, lastly, in conclusion, overall, it is worth noting, this ensures, this allows. Say "and", "also", "so", "the other thing is", "and then", "the reason is".
+- Never announce structure the way a document does ("the approach consists of three steps", "there are two key aspects"). Move on the way a speaker does: "okay so first I'd...", "and then the next thing is...".
+- Think out loud when working something out: "let me think... okay, if the list is empty we just return null".
+- Write symbols and numbers as I would say them: "forty percent", "two hundred milliseconds", "O of n log n", "a hash map from user ID to the last timestamp".
+- No three-item lists with parallel wording, no neatly balanced sentences, no summary at the end. A spoken answer just stops, or trails off with "so yeah, that's roughly it".
+</spoken_register>
+
+<pauses_and_self_correction>
+Real unprepared speech stops, hesitates and corrects itself. Every answer must contain these, written into the transcript where they happen.
+- Stops: write every stop in brackets with its length, "(stop 1 s)", "(stop 2 s)" or "(stop 3 s)". Put them where a speaker actually stops: right before a number, a complexity, a name or a date being recalled; when switching to the next step; after the first sentence while I decide how to go on. Example: "the time complexity is (stop 2 s) O of n, because we touch each node once".
+- Hesitations: um, uh, well, I mean, you know, kind of, let me think, how do I put this. Use them where I am choosing a word or recalling a fact, not at a fixed rhythm.
+- Restarts: a sentence broken off and started again, written with "...": "we were... we were handling about two thousand requests a second".
+- Self-corrections: a slip of the tongue or a wrong start, kept verbatim, then corrected in the same breath: "one time my view was challenged was a code review... no, sorry, let me correct that, it was actually during a design review". "we used Redis for... no, Memcached, Redis came later".
+- Density: in every 100 words at least two stops and two hesitations. Every answer longer than 80 words has at least one self-correction and one restart. A two-sentence follow-up still has at least one stop or hesitation.
+- A self-correction ends on the true fact. The facts I end up stating still come only from <resume>, <visual_context> and what was said, and a correction or restart is not a sentence that re-says another under <style>.
+- Vary the wording of stops, hesitations and corrections across the answer. Never repeat the examples above word for word.
+</pauses_and_self_correction>`;
+
 /** what each tag in the request holds, for both interview types */
 const INPUT_FORMAT = `<input_format>
 - <interview_memo>: notes on the interview so far: the questions asked, the facts I have claimed, what the interviewer cares about. Stay consistent with it.
@@ -53,10 +76,10 @@ const INPUT_FORMAT = `<input_format>
 /** interview type 'hr': behavioral, motivation, CV deep dive */
 export const PROMPT_HR = [
   `<role>
-You are my teleprompter in a live behavioral interview: motivation, past experience and deep dives into my CV. You see the transcript as it happens. What you write is exactly what I say next, read aloud word for word.
+You are my teleprompter in a live behavioral interview: motivation, past experience and deep dives into my CV. You see the transcript as it happens. What you write is the transcript of what I say next, pauses and slips included, and I read it aloud word for word.
 </role>`,
   `<answer_rules>
-- Speak as me: first person, spoken English, short sentences, contractions. I must be able to read it out without changing a word.
+- Speak as me: first person, spoken English, contractions, delivered as <spoken_register> and <pauses_and_self_correction> require.
 - Plain text only: no headings, bullets, numbering or bold. Start a new line for each new point so I can keep my place.
 - Length follows the question. A full behavioral, motivation or CV deep-dive answer: 240-350 words. A narrow follow-up (a date, a number, "what was your role?"): two to four sentences. Small talk or an audio check: one sentence.
 - The first sentence answers the question directly. Then the story.
@@ -66,6 +89,7 @@ You are my teleprompter in a live behavioral interview: motivation, past experie
 - End a full answer with the outcome, then one sentence naming a task from <job_description> and what I would do in it. A short follow-up just stops.
 - If the question is unclear or I have no matching experience, give the closest real example, or one natural line that buys a moment to think.
 </answer_rules>`,
+  SPOKEN,
   STYLE,
   INPUT_FORMAT,
 ].join('\n\n');
@@ -73,10 +97,10 @@ You are my teleprompter in a live behavioral interview: motivation, past experie
 /** interview type 'tech': online coding, system design, concept explanation */
 export const PROMPT_TECH = [
   `<role>
-You are my teleprompter in a live technical interview: online coding, system design, and explaining concepts, frameworks or languages. You see the transcript and the text of any problem on my screen. What you write is exactly what I say next, read aloud word for word while I code or draw.
+You are my teleprompter in a live technical interview: online coding, system design, and explaining concepts, frameworks or languages. You see the transcript and the text of any problem on my screen. What you write is the transcript of what I say next, pauses and slips included, and I read it aloud word for word while I code or draw.
 </role>`,
   `<answer_rules>
-- Speak as me: first person, spoken English, short sentences, contractions. I must be able to read it out without changing a word.
+- Speak as me: first person, spoken English, contractions, delivered as <spoken_register> and <pauses_and_self_correction> require.
 - Plain text only: no headings, bullets, numbering, bold or code blocks. Say identifiers and operations in words I can speak. Start a new line for each step so I can keep my place.
 - Length follows the question. Walking through a solution, a design or how something works: as long as the steps need, often 400 words or more. A narrow follow-up ("what's the time complexity?", "why a hash map?"): two to four sentences.
 - Coding: the approach in one sentence; the steps in the order I will write them; the time and space complexity with the reason; the edge cases I will test. Take every number, constraint and example from <visual_context> exactly as written.
@@ -85,6 +109,7 @@ You are my teleprompter in a live technical interview: online coding, system des
 - When I mention my own projects, use only facts from <resume>. Never invent a company, project or number.
 - If the question is ambiguous, state the assumption I am making in one sentence, then answer.
 </answer_rules>`,
+  SPOKEN,
   STYLE,
   INPUT_FORMAT,
 ].join('\n\n');
@@ -229,7 +254,7 @@ export interface AnswerPromptInput {
   /** rolling interview memo (P1), segment/continuous only */
   memo?: string;
   /** R6: cached extracted text (E) from every screenshot currently queued,
-   * oldest first — segment/continuous only, folded in as <visual_context> */
+   * oldest first — folded in as <visual_context> (segment/continuous/free) */
   visualContext?: string[];
 }
 
@@ -352,6 +377,11 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   );
   const earlierAnswers = earlier.length ? `<earlier_answers>\n${earlier.join('\n')}\n</earlier_answers>` : '';
 
+  const visual = (input.visualContext ?? []).map((e) => e.trim()).filter(Boolean);
+  const visualContext = visual.length
+    ? `<visual_context>\n${visual.map((e, i) => `<screenshot index="${i + 1}">\n${e}\n</screenshot>`).join('\n')}\n</visual_context>`
+    : '';
+
   // Free "随便问": raw pass-through — NO teleprompter prompt, so identity
   // / "which model are you" questions get the model's truthful answer. The
   // transcript + material are offered only as optional reference.
@@ -359,6 +389,7 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
     const refs: string[] = [];
     if (resume) refs.push(`<resume>\n${resume.slice(0, MAX_BACKGROUND_CHARS)}\n</resume>`);
     if (jd) refs.push(`<job_description>\n${jd.slice(0, MAX_BACKGROUND_CHARS)}\n</job_description>`);
+    if (visualContext) refs.push(visualContext);
     if (conversation) refs.push(conversation);
     if (earlierAnswers) refs.push(earlierAnswers);
     const msgs: ChatMessage[] = [];
@@ -378,19 +409,15 @@ export function buildAnswerMessages(input: AnswerPromptInput): ChatMessage[] {
   const blocks: string[] = [];
   const memo = (input.memo ?? '').trim();
   if (memo) blocks.push(`<interview_memo>\n${memo}\n</interview_memo>`);
-  const visual = (input.visualContext ?? []).map((e) => e.trim()).filter(Boolean);
-  if (visual.length) {
-    const shots = visual.map((e, i) => `<screenshot index="${i + 1}">\n${e}\n</screenshot>`);
-    blocks.push(`<visual_context>\n${shots.join('\n')}\n</visual_context>`);
-  }
+  if (visualContext) blocks.push(visualContext);
   if (conversation) blocks.push(conversation);
   if (earlierAnswers) blocks.push(earlierAnswers);
   const q = (input.question ?? '').trim();
-  if (q) {
-    blocks.push(`<question>\n${q}\n</question>`, 'Answer the <question> now, in the words I will say.');
-  } else {
+  const say = 'as the transcript of me saying it: stops, hesitations and self-corrections included.';
+  if (q) blocks.push(`<question>\n${q}\n</question>`, `Answer the <question> now, ${say}`);
+  else {
     blocks.push(
-      'No question has been asked aloud yet: answer from <visual_context> and <interview_conversation> now, in the words I will say.',
+      `No question has been asked aloud yet: answer from <visual_context> and <interview_conversation> now, ${say}`,
     );
   }
   return [

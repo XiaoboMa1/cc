@@ -80,7 +80,7 @@ describe('buildAnswerMessages (segment / continuous)', () => {
     const user = lastUser(msgs);
     expect(user).toContain('<question>\nWhat is the time complexity?\n</question>');
     expect(user.indexOf('<interview_conversation>')).toBeLessThan(user.indexOf('<question>'));
-    expect(user.endsWith('Answer the <question> now, in the words I will say.')).toBe(true);
+    expect(user.endsWith('Answer the <question> now, as the transcript of me saying it: stops, hesitations and self-corrections included.')).toBe(true);
   });
 
   it('groups consecutive lines of one speaker into one element', () => {
@@ -170,6 +170,8 @@ describe('interview type picks the system prompt', () => {
       expect(p).toContain('Who else could say it?');
       expect(p).toContain('"A, not B"');
       expect(p).toContain('<input_format>');
+      expect(p).toContain('<spoken_register>');
+      expect(p).toContain('"(stop 2 s)"');
     }
   });
 
@@ -195,15 +197,15 @@ describe('buildAnswerMessages visual context (R6: queued-screenshot E)', () => {
     expect(user.indexOf('<visual_context>')).toBeLessThan(user.indexOf('<interview_conversation>'));
   });
 
-  it('drops blank entries and never leaks into free/translate modes', () => {
+  it('drops blank entries, reaches free mode as reference, never leaks into translate', () => {
     const user = lastUser(
       buildAnswerMessages({ mode: 'segment', question: 'x', transcript: [], visualContext: ['  ', 'real content'] }),
     );
     expect(user).toContain('<screenshot index="1">\nreal content\n</screenshot>');
     expect(user).not.toContain('index="2"');
 
-    const free = buildAnswerMessages({ mode: 'free', freeQuestion: 'hi', transcript: [], visualContext: ['leaked?'] });
-    expect(JSON.stringify(free)).not.toContain('leaked?');
+    const free = buildAnswerMessages({ mode: 'free', freeQuestion: 'hi', transcript: [], visualContext: ['Reverse a list.'] });
+    expect(free[0].content).toContain('<visual_context>\n<screenshot index="1">\nReverse a list.\n</screenshot>');
     const translate = buildAnswerMessages({ mode: 'translate', question: 'hi', transcript: [], visualContext: ['leaked?'] });
     expect(JSON.stringify(translate)).not.toContain('leaked?');
   });

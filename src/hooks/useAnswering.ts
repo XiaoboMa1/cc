@@ -114,7 +114,7 @@ export function useAnswering({
       // ASR is still finalizing (a partial turns into a segment ~1 s after
       // speech ends) and screenshots still being extracted. Sending at once
       // would leave out the question just asked / the screenshot just taken.
-      if (mode === 'segment' || mode === 'continuous') {
+      if (mode !== 'translate') {
         const pending = () =>
           (mode === 'continuous' && !!partialsRef.current.them && Date.now() - askedAt < PARTIAL_WAIT_MS) ||
           ((shotQueuesRef.current[sid] ?? []).some((it) => it.status === 'extracting') &&
